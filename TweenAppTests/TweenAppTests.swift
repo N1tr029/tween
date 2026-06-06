@@ -5,6 +5,7 @@
 //  Created by Kavi Gandham on 6/6/26.
 //
 
+import CoreLocation
 import Foundation
 import Testing
 @testable import TweenApp
@@ -32,5 +33,23 @@ struct TweenStateTests {
 
     @Test func returnsNilForUnrelatedURL() {
         #expect(TweenState(url: URL(string: "https://example.com/nope")!) == nil)
+    }
+}
+
+struct LocationCacheTests {
+
+    @Test func roundTripsCoordinate() {
+        LocationCache.clear()
+        defer { LocationCache.clear() }
+
+        LocationCache.save(CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090))
+        let loaded = LocationCache.load()
+        #expect(loaded?.latitude == 37.3349)
+        #expect(loaded?.longitude == -122.0090)
+    }
+
+    @Test func loadReturnsNilWhenEmpty() {
+        LocationCache.clear()
+        #expect(LocationCache.load() == nil)
     }
 }

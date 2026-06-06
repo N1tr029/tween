@@ -14,6 +14,10 @@
 		A1000000000000000000024A /* TweenState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000005A /* TweenState.swift */; };
 		A1000000000000000000025A /* Messages.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1000000000000000000006A /* Messages.framework */; };
 		A1000000000000000000026A /* TweenMessages.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001A /* TweenMessages.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AA0000000000000000000101 /* LocationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* LocationCache.swift */; };
+		AA0000000000000000000102 /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* LocationProvider.swift */; };
+		AA0000000000000000000103 /* LocationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* LocationCache.swift */; };
+		AA0000000000000000000104 /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* LocationProvider.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -64,6 +68,8 @@
 		A1000000000000000000004A /* TweenViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweenViews.swift; sourceTree = "<group>"; };
 		A1000000000000000000005A /* TweenState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweenState.swift; sourceTree = "<group>"; };
 		A1000000000000000000006A /* Messages.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Messages.framework; path = System/Library/Frameworks/Messages.framework; sourceTree = SDKROOT; };
+		AA0000000000000000000201 /* LocationCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationCache.swift; sourceTree = "<group>"; };
+		AA0000000000000000000202 /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -155,6 +161,8 @@
 			children = (
 				A1000000000000000000005A /* TweenState.swift */,
 				A1000000000000000000004A /* TweenViews.swift */,
+				AA0000000000000000000201 /* LocationCache.swift */,
+				AA0000000000000000000202 /* LocationProvider.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -345,6 +353,8 @@
 			files = (
 				A1000000000000000000024A /* TweenState.swift in Sources */,
 				A1000000000000000000023A /* TweenViews.swift in Sources */,
+				AA0000000000000000000101 /* LocationCache.swift in Sources */,
+				AA0000000000000000000102 /* LocationProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -369,6 +379,8 @@
 				A1000000000000000000020A /* MessagesViewController.swift in Sources */,
 				A1000000000000000000021A /* TweenViews.swift in Sources */,
 				A1000000000000000000022A /* TweenState.swift in Sources */,
+				AA0000000000000000000103 /* LocationCache.swift in Sources */,
+				AA0000000000000000000104 /* LocationProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -516,10 +528,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = TweenApp.entitlements;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tween uses your location once to share where you are for a meetup.";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"TweenApp/Preview Content\"";
+				DEVELOPMENT_TEAM = T4VT6R837D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -544,10 +559,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = TweenApp.entitlements;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tween uses your location once to share where you are for a meetup.";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"TweenApp/Preview Content\"";
+				DEVELOPMENT_TEAM = T4VT6R837D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -639,8 +657,10 @@
 		A1000000000000000000042A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = TweenMessages.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = T4VT6R837D;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TweenMessages/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
@@ -664,8 +684,10 @@
 		A1000000000000000000043A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = TweenMessages.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = T4VT6R837D;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TweenMessages/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;

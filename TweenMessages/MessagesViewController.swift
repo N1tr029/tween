@@ -1,3 +1,4 @@
+import CoreLocation
 import Messages
 import SwiftUI
 import UIKit
@@ -5,16 +6,23 @@ import UIKit
 /// Switches between compact and expanded SwiftUI views and wires their actions
 /// back to the Messages controller.
 private struct RootView: View {
-    let state: TweenState
+    let received: TweenState?
+    let cachedCoordinate: CLLocationCoordinate2D?
+    let isRequesting: Bool
     let isExpanded: Bool
     let onExpand: () -> Void
-    let onSend: (TweenState) -> Void
+    let onImIn: () -> Void
 
     var body: some View {
         if isExpanded {
-            ExpandedView(state: state, onSend: onSend)
+            ExpandedView(
+                received: received,
+                cachedCoordinate: cachedCoordinate,
+                isRequesting: isRequesting,
+                onImIn: onImIn
+            )
         } else {
-            CompactView(state: state, onTap: onExpand)
+            CompactView(state: received ?? .placeholder, onTap: onExpand)
         }
     }
 }
@@ -22,7 +30,9 @@ private struct RootView: View {
 final class MessagesViewController: MSMessagesAppViewController {
 
     private var hostingController: UIHostingController<RootView>?
-    private var state: TweenState = .placeholder
+    private var received: TweenState?
+    private var isRequesting = false
+    private let locationProvider = LocationProvider()
 
     // MARK: - Conversation lifecycle
 
@@ -30,33 +40,25 @@ final class MessagesViewController: MSMessagesAppViewController {
         super.willBecomeActive(with: conversation)
         // When a recipient taps the bubble, the extension opens here with the tapped
         // message available as `selectedMessage`. Read our state back out of its URL.
-        loadState(from: conversation)
-        presentUI(for: presentationStyle)
+        received = conversation.selectedMessage?.url.flatMap(TweenState.init(url:))
+        presentUI()
     }
 
     override func willTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
         super.willTransition(to: presentationStyle)
-        presentUI(for: presentationStyle)
-    }
-
-    // MARK: - State
-
-    private func loadState(from conversation: MSConversation) {
-        if let url = conversation.selectedMessage?.url, let decoded = TweenState(url: url) {
-            state = decoded
-        } else {
-            state = .placeholder
-        }
+        presentUI()
     }
 
     // MARK: - UI
 
-    private func presentUI(for style: MSMessagesAppPresentationStyle) {
+    private func presentUI() {
         let root = RootView(
-            state: state,
-            isExpanded: style == .expanded,
+            received: received,
+            cachedCoordinate: LocationCache.load(),
+            isRequesting: isRequesting,
+            isExpanded: presentationStyle == .expanded,
             onExpand: { [weak self] in self?.requestPresentationStyle(.expanded) },
-            onSend: { [weak self] newState in self?.send(newState) }
+            onImIn: { [weak self] in self?.handleImIn() }
         )
 
         if let hostingController {
@@ -78,6 +80,31 @@ final class MessagesViewController: MSMessagesAppViewController {
         hostingController = hosting
     }
 
+    // MARK: - "I'm in"
+
+    private func handleImIn() {
+        // Reuse the location the app already captured; only request in-extension if none exists.
+        if let coordinate = LocationCache.load() {
+            sendImIn(coordinate)
+            return
+        }
+        isRequesting = true
+        presentUI()
+        locationProvider.requestOnce { [weak self] coordinate in
+            guard let self else { return }
+            self.isRequesting = false
+            if let coordinate {
+                self.sendImIn(coordinate)
+            } else {
+                self.presentUI() // reflect denied / no-location state
+            }
+        }
+    }
+
+    private func sendImIn(_ coordinate: CLLocationCoordinate2D) {
+        send(TweenState(text: "I'm in", latitude: coordinate.latitude, longitude: coordinate.longitude))
+    }
+
     // MARK: - Sending
 
     private func send(_ newState: TweenState) {
@@ -85,7 +112,7 @@ final class MessagesViewController: MSMessagesAppViewController {
 
         let layout = MSMessageTemplateLayout()
         layout.caption = newState.text
-        layout.subcaption = CompactView.coordinateText(newState)
+        layout.subcaption = formatCoordinate(latitude: newState.latitude, longitude: newState.longitude)
 
         // Reuse the tapped message's session so the existing bubble updates in place
         // (GamePigeon style); start a new session when composing fresh.

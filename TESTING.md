@@ -69,8 +69,64 @@ A message bounces A → B → A, each side editing it, with the state surviving 
 is the full round-trip.
 
 ## Notes / known limitations at this phase
-- No App Group yet and no `com.tween.app` bundle-id rename — deferred (not needed for the URL
-  round-trip). Signing must be configured before the two-device test can run on hardware.
-- The coordinate is a hard-coded placeholder; real location/map come in a later phase.
+- Signing must be configured before the two-device test can run on hardware.
 - Sending always requires the user to tap the send arrow (iMessage inserts into the input
   field; apps cannot send silently). This is expected.
+
+> Note: as of Phase 2 the expanded view's control is **"I'm in"** (sends your cached location),
+> not the Phase 1 "edit text + Send update" demo. The A → B → A round-trip is now driven by
+> tapping **I'm in** on each side.
+
+# Testing Tween — Phase 2 (location, once)
+
+Phase 2 captures the user's location one time in the app, caches it to the shared App Group
+container (`group.com.kavigandham.tween`), and reuses it from the extension's "I'm in" control.
+
+## What is verified automatically
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export PATH="$DEVELOPER_DIR/usr/bin:$PATH"   # so the test runner can find simctl
+
+# Build both targets (unsigned is fine for the simulator)
+xcodebuild build -project TweenApp.xcodeproj -scheme TweenApp \
+  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+
+# LocationCache + TweenState round-trip tests
+xcodebuild test -project TweenApp.xcodeproj -scheme TweenApp \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -only-testing:TweenAppTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+```
+
+Screenshots: `docs/screenshots/phase2-onboarding.png` (the app's location request screen) and
+`docs/screenshots/phase2-harness.png` (the extension's compact + "I'm in" expanded views,
+rendered in the app — launch the app with the `HARNESS` argument).
+
+**What the simulator/CLI cannot verify:** the *cross-process* App Group share (app writes →
+extension reads) and the in-Messages "I'm in" send. The App Group entitlement is not embedded
+in the unsigned simulator build, and the Messages UI can't be driven from the CLI. Both need
+the two-device test below.
+
+## Two-device manual test (builds on Phase 1 setup)
+
+Prerequisite: a valid signing Team on **both** targets (already set: `T4VT6R837D`), so Xcode
+can provision the `group.com.kavigandham.tween` App Group when you build to a device.
+
+### Test 4 — Capture location in the app
+1. Run the `TweenApp` scheme on device **A**. On the onboarding screen tap **Share my
+   location** and allow "While Using the App".
+   - ✅ Pass: the screen shows "Saved <lat, lon>".
+
+### Test 5 — Extension reuses the cached location
+1. On **A**, open Messages → a conversation → the Tween iMessage app → expand.
+   - ✅ Pass: the **Your location** panel shows the same coordinate the app saved (proving the
+     App Group share works), and the button reads **I'm in**.
+2. Tap **I'm in**, then send the inserted bubble to **B**.
+   - ✅ Pass: **B** receives an "I'm in" bubble whose location matches **A**'s saved coordinate.
+
+### Test 6 — Request-in-extension fallback
+1. On a device where the app has **not** captured a location yet, open the Tween extension and
+   expand. The button reads **Share location & say I'm in**.
+2. Tap it and allow location.
+   - ✅ Pass: the extension requests location in-place (using its own Info.plist usage string),
+     caches it, and sends the "I'm in" bubble.
