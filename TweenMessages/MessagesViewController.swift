@@ -21,11 +21,53 @@ private struct RootView: View {
                 isRequesting: isRequesting,
                 onImIn: onImIn
             )
+            #if DEBUG
+            .overlay(alignment: .top) { DebugCacheOverlay() }
+            #endif
         } else {
             CompactView(state: received ?? .placeholder, onTap: onExpand, onImIn: onImIn)
         }
     }
 }
+
+#if DEBUG
+// Slice 1 verification harness: writes a peer-sentinel into the App Group and
+// displays whatever the app wrote to self. 1 Hz refresh via TimelineView so a
+// fresh value from the other process becomes visible without re-expanding.
+// Delete with `git grep '#if DEBUG'`.
+private struct DebugCacheOverlay: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0)) { _ in
+            let selfCoord = LocationCache.load()
+            let peerCoord = LocationCache.loadPeer()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("DEBUG · App Group")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Text("self: \(formatDebug(selfCoord))")
+                    .font(.caption.monospaced())
+                Text("peer: \(formatDebug(peerCoord))")
+                    .font(.caption.monospaced())
+                Button("Write peer sentinel (21.654321, 87.654321)") {
+                    LocationCache.savePeer(CLLocationCoordinate2D(latitude: 21.654321, longitude: 87.654321))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+        }
+    }
+
+    private func formatDebug(_ coordinate: CLLocationCoordinate2D?) -> String {
+        guard let coordinate else { return "nil" }
+        return String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude)
+    }
+}
+#endif
 
 final class MessagesViewController: MSMessagesAppViewController {
 

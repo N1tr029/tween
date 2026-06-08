@@ -64,7 +64,12 @@ struct OnboardingView: View {
             .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .including([.cafe, .restaurant, .publicTransport])))
             .ignoresSafeArea()
 
-            searchBar
+            VStack(spacing: 8) {
+                searchBar
+                #if DEBUG
+                debugCachePanel
+                #endif
+            }
 
             VStack {
                 Spacer()
@@ -81,6 +86,37 @@ struct OnboardingView: View {
             await pollSharedLocations()
         }
     }
+
+    #if DEBUG
+    // Slice 1 verification harness: writes a self-sentinel into the App Group and
+    // displays whatever the extension wrote to peer. Delete with `git grep '#if DEBUG'`.
+    private var debugCachePanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("DEBUG · App Group")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+            Text("self: \(formatDebug(savedCoordinate))")
+                .font(.caption.monospaced())
+            Text("peer: \(formatDebug(peerCoordinate))")
+                .font(.caption.monospaced())
+            Button("Write self sentinel (12.345678, -98.765432)") {
+                LocationCache.save(CLLocationCoordinate2D(latitude: 12.345678, longitude: -98.765432))
+                refreshSavedLocation()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 16)
+    }
+
+    private func formatDebug(_ coordinate: CLLocationCoordinate2D?) -> String {
+        guard let coordinate else { return "nil" }
+        return String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude)
+    }
+    #endif
 
     private var searchBar: some View {
         HStack(spacing: 10) {
