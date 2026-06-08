@@ -39,10 +39,11 @@ struct TweenStateTests {
 @Suite(.serialized)
 struct LocationCacheTests {
 
-    @Test func roundTripsCoordinate() {
-        LocationCache.clearAll()
-        defer { LocationCache.clearAll() }
+    init() {
+        UserDefaults().removePersistentDomain(forName: LocationCache.suiteName)
+    }
 
+    @Test func roundTripsCoordinate() {
         LocationCache.save(CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090))
         let loaded = LocationCache.load()
         #expect(loaded?.latitude == 37.3349)
@@ -50,9 +51,6 @@ struct LocationCacheTests {
     }
 
     @Test func roundTripsPeerCoordinateSeparately() {
-        LocationCache.clearAll()
-        defer { LocationCache.clearAll() }
-
         LocationCache.savePeer(CLLocationCoordinate2D(latitude: 40.7128, longitude: -74.0060))
         #expect(LocationCache.load() == nil)
         let loaded = LocationCache.loadPeer()
@@ -61,7 +59,6 @@ struct LocationCacheTests {
     }
 
     @Test func loadReturnsNilWhenEmpty() {
-        LocationCache.clearAll()
         #expect(LocationCache.load() == nil)
         #expect(LocationCache.loadPeer() == nil)
     }
