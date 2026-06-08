@@ -22,7 +22,7 @@ private struct RootView: View {
                 onImIn: onImIn
             )
         } else {
-            CompactView(state: received ?? .placeholder, onTap: onExpand)
+            CompactView(state: received ?? .placeholder, onTap: onExpand, onImIn: onImIn)
         }
     }
 }
@@ -41,12 +41,30 @@ final class MessagesViewController: MSMessagesAppViewController {
         // When a recipient taps the bubble, the extension opens here with the tapped
         // message available as `selectedMessage`. Read our state back out of its URL.
         received = conversation.selectedMessage?.url.flatMap(TweenState.init(url:))
+        if let selectedMessage = conversation.selectedMessage {
+            cachePeerLocation(from: selectedMessage, conversation: conversation)
+        }
         presentUI()
     }
 
     override func willTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
         super.willTransition(to: presentationStyle)
         presentUI()
+    }
+
+    override func didReceive(_ message: MSMessage, conversation: MSConversation) {
+        super.didReceive(message, conversation: conversation)
+        cachePeerLocation(from: message, conversation: conversation)
+        presentUI()
+    }
+
+    private func cachePeerLocation(from message: MSMessage, conversation: MSConversation) {
+        guard
+            let state = message.url.flatMap(TweenState.init(url:))
+        else { return }
+
+        received = state
+        LocationCache.savePeer(state.coordinate)
     }
 
     // MARK: - UI

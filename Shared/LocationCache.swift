@@ -11,9 +11,13 @@ enum LocationCache {
     static let suiteName = "group.com.kavigandham.tween"
 
     private enum Key {
+        static let isActive = "cachedIsActive"
         static let latitude = "cachedLatitude"
         static let longitude = "cachedLongitude"
         static let timestamp = "cachedTimestamp"
+        static let peerLatitude = "cachedPeerLatitude"
+        static let peerLongitude = "cachedPeerLongitude"
+        static let peerTimestamp = "cachedPeerTimestamp"
     }
 
     private static var defaults: UserDefaults? {
@@ -22,7 +26,7 @@ enum LocationCache {
 
     /// The cached coordinate, or nil if none has been stored yet.
     static func load() -> CLLocationCoordinate2D? {
-        guard let defaults, defaults.object(forKey: Key.latitude) != nil else { return nil }
+        guard let defaults, defaults.bool(forKey: Key.isActive), defaults.object(forKey: Key.latitude) != nil else { return nil }
         return CLLocationCoordinate2D(
             latitude: defaults.double(forKey: Key.latitude),
             longitude: defaults.double(forKey: Key.longitude)
@@ -32,13 +36,39 @@ enum LocationCache {
     /// Persists the coordinate (overwriting any previous one) with a capture timestamp.
     static func save(_ coordinate: CLLocationCoordinate2D) {
         guard let defaults else { return }
+        defaults.set(true, forKey: Key.isActive)
         defaults.set(coordinate.latitude, forKey: Key.latitude)
         defaults.set(coordinate.longitude, forKey: Key.longitude)
         defaults.set(Date().timeIntervalSince1970, forKey: Key.timestamp)
     }
 
+    static func loadPeer() -> CLLocationCoordinate2D? {
+        guard let defaults, defaults.object(forKey: Key.peerLatitude) != nil else { return nil }
+        return CLLocationCoordinate2D(
+            latitude: defaults.double(forKey: Key.peerLatitude),
+            longitude: defaults.double(forKey: Key.peerLongitude)
+        )
+    }
+
+    static func savePeer(_ coordinate: CLLocationCoordinate2D) {
+        guard let defaults else { return }
+        defaults.set(coordinate.latitude, forKey: Key.peerLatitude)
+        defaults.set(coordinate.longitude, forKey: Key.peerLongitude)
+        defaults.set(Date().timeIntervalSince1970, forKey: Key.peerTimestamp)
+    }
+
     static func clear() {
         guard let defaults else { return }
-        [Key.latitude, Key.longitude, Key.timestamp].forEach(defaults.removeObject(forKey:))
+        [Key.isActive, Key.latitude, Key.longitude, Key.timestamp].forEach(defaults.removeObject(forKey:))
+    }
+
+    static func clearPeer() {
+        guard let defaults else { return }
+        [Key.peerLatitude, Key.peerLongitude, Key.peerTimestamp].forEach(defaults.removeObject(forKey:))
+    }
+
+    static func clearAll() {
+        clear()
+        clearPeer()
     }
 }

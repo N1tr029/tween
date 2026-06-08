@@ -33,7 +33,7 @@ private struct ViewHarness: View {
                     .font(.title2.bold())
 
                 section("Compact") {
-                    CompactView(state: received, onTap: {})
+                    CompactView(state: received, onTap: {}, onImIn: {})
                         .frame(height: 90)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
                 }
