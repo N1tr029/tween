@@ -1,4 +1,5 @@
 import CoreLocation
+import MapKit
 import Messages
 import SwiftUI
 import UIKit
@@ -10,6 +11,7 @@ private struct RootView: View {
     let cachedCoordinate: CLLocationCoordinate2D?
     let isRequesting: Bool
     let isExpanded: Bool
+    let rankedSpots: [RankedSpot]
     let onExpand: () -> Void
     let onImIn: () -> Void
 
@@ -19,6 +21,7 @@ private struct RootView: View {
                 received: received,
                 cachedCoordinate: cachedCoordinate,
                 isRequesting: isRequesting,
+                rankedSpots: rankedSpots,
                 onImIn: onImIn
             )
             #if DEBUG
@@ -74,6 +77,8 @@ final class MessagesViewController: MSMessagesAppViewController {
     private var hostingController: UIHostingController<RootView>?
     private var received: TweenState?
     private var isRequesting = false
+    private var rankedSpots: [RankedSpot] = []
+    private var rankingTask: Task<Void, Never>?
     private let locationProvider = LocationProvider()
 
     // MARK: - Conversation lifecycle
@@ -91,13 +96,66 @@ final class MessagesViewController: MSMessagesAppViewController {
 
     override func willTransition(to presentationStyle: MSMessagesAppPresentationStyle) {
         super.willTransition(to: presentationStyle)
+        if presentationStyle == .expanded {
+            kickOffRanking()
+        }
         presentUI()
     }
 
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
         super.didReceive(message, conversation: conversation)
         cachePeerLocation(from: message, conversation: conversation)
+        if presentationStyle == .expanded {
+            kickOffRanking()
+        }
         presentUI()
+    }
+
+    // MARK: - Fairness ranking (extension side)
+
+    private func kickOffRanking() {
+        guard let peer = received?.coordinate,
+              let me = LocationCache.load() else {
+            rankedSpots = []
+            return
+        }
+        rankingTask?.cancel()
+        rankingTask = Task { [weak self] in
+            let candidates = await Self.searchCandidates(between: me, and: peer)
+            if Task.isCancelled { return }
+            let ranked = await FairnessRanker.rank(candidates: candidates, from: me, and: peer, cap: 5)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.rankedSpots = ranked
+                self.presentUI()
+            }
+        }
+    }
+
+    private static func searchCandidates(
+        between a: CLLocationCoordinate2D,
+        and b: CLLocationCoordinate2D
+    ) async -> [MKMapItem] {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = "cafe restaurant park"
+        request.resultTypes = [.pointOfInterest]
+        let midpoint = CLLocationCoordinate2D(
+            latitude: (a.latitude + b.latitude) / 2,
+            longitude: (a.longitude + b.longitude) / 2
+        )
+        let latitudeSpan = max(abs(a.latitude - b.latitude) * 1.6, 0.03)
+        let longitudeSpan = max(abs(a.longitude - b.longitude) * 1.6, 0.03)
+        request.region = MKCoordinateRegion(
+            center: midpoint,
+            span: MKCoordinateSpan(latitudeDelta: latitudeSpan, longitudeDelta: longitudeSpan)
+        )
+        do {
+            let response = try await MKLocalSearch(request: request).start()
+            return Array(response.mapItems.prefix(8))
+        } catch {
+            return []
+        }
     }
 
     private func cachePeerLocation(from message: MSMessage, conversation: MSConversation) {
@@ -117,6 +175,7 @@ final class MessagesViewController: MSMessagesAppViewController {
             cachedCoordinate: LocationCache.load(),
             isRequesting: isRequesting,
             isExpanded: presentationStyle == .expanded,
+            rankedSpots: rankedSpots,
             onExpand: { [weak self] in self?.requestPresentationStyle(.expanded) },
             onImIn: { [weak self] in self?.handleImIn() }
         )
