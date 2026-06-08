@@ -18,6 +18,8 @@
 		AA0000000000000000000102 /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* LocationProvider.swift */; };
 		AA0000000000000000000103 /* LocationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000201 /* LocationCache.swift */; };
 		AA0000000000000000000104 /* LocationProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000202 /* LocationProvider.swift */; };
+		AA0000000000000000000105 /* FairnessRanker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* FairnessRanker.swift */; };
+		AA0000000000000000000106 /* FairnessRanker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* FairnessRanker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +72,7 @@
 		A1000000000000000000006A /* Messages.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Messages.framework; path = System/Library/Frameworks/Messages.framework; sourceTree = SDKROOT; };
 		AA0000000000000000000201 /* LocationCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationCache.swift; sourceTree = "<group>"; };
 		AA0000000000000000000202 /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
+		AA0000000000000000000203 /* FairnessRanker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FairnessRanker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -163,6 +166,7 @@
 				A1000000000000000000004A /* TweenViews.swift */,
 				AA0000000000000000000201 /* LocationCache.swift */,
 				AA0000000000000000000202 /* LocationProvider.swift */,
+				AA0000000000000000000203 /* FairnessRanker.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -355,6 +359,7 @@
 				A1000000000000000000023A /* TweenViews.swift in Sources */,
 				AA0000000000000000000101 /* LocationCache.swift in Sources */,
 				AA0000000000000000000102 /* LocationProvider.swift in Sources */,
+				AA0000000000000000000105 /* FairnessRanker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -381,6 +386,7 @@
 				A1000000000000000000022A /* TweenState.swift in Sources */,
 				AA0000000000000000000103 /* LocationCache.swift in Sources */,
 				AA0000000000000000000104 /* LocationProvider.swift in Sources */,
+				AA0000000000000000000106 /* FairnessRanker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -17,6 +17,7 @@ struct OnboardingView: View {
     @State private var peerCoordinate = LocationCache.loadPeer()
     @State private var searchText = ""
     @State private var searchResults: [MKMapItem] = []
+    @State private var rankedSpots: [RankedSpot] = []
     @State private var selectedPlace: MKMapItem?
     @State private var searchError: String?
     @State private var panelDetent: PanelDetent = .medium
@@ -105,6 +106,11 @@ struct OnboardingView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            Button("Run ranker dry-run (SF ↔ Palo Alto, 'cafe')") {
+                runRankerDryRun()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -115,6 +121,37 @@ struct OnboardingView: View {
     private func formatDebug(_ coordinate: CLLocationCoordinate2D?) -> String {
         guard let coordinate else { return "nil" }
         return String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude)
+    }
+
+    private func runRankerDryRun() {
+        let a = CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194) // SF
+        let b = CLLocationCoordinate2D(latitude: 37.4419, longitude: -122.1430) // Palo Alto
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = "cafe"
+        request.resultTypes = [.pointOfInterest]
+        request.region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: (a.latitude + b.latitude) / 2,
+                                           longitude: (a.longitude + b.longitude) / 2),
+            span: MKCoordinateSpan(latitudeDelta: 0.6, longitudeDelta: 0.6)
+        )
+        Task {
+            print("[FairnessRanker dry-run] searching 'cafe' between SF and Palo Alto…")
+            do {
+                let response = try await MKLocalSearch(request: request).start()
+                let items = Array(response.mapItems.prefix(8))
+                let ranked = await FairnessRanker.rank(candidates: items, from: a, and: b)
+                print("[FairnessRanker dry-run] top \(min(5, ranked.count)) of \(ranked.count) (cap \(FairnessRanker.defaultCap)):")
+                for (i, spot) in ranked.prefix(5).enumerated() {
+                    let name = spot.item.name ?? "?"
+                    let worse = Int(spot.worseETA / 60)
+                    let gap = Int(spot.fairnessGap / 60)
+                    let conf = String(format: "%.2f", spot.confidence)
+                    print("  \(i + 1). \(name) | worseETA \(worse)m | gap \(gap)m | confidence \(conf)")
+                }
+            } catch {
+                print("[FairnessRanker dry-run] search failed: \(error)")
+            }
+        }
     }
     #endif
 
@@ -350,10 +387,18 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 
-                    HStack(spacing: 8) {
-                        distanceChip("You", distanceFrom(savedCoordinate, to: item))
-                        distanceChip("Friend", distanceFrom(peerCoordinate, to: item))
-                        distanceChip("Middle", distanceFrom(midpointCoordinate, to: item))
+                    if let ranked = rankedSpot(for: item) {
+                        HStack(spacing: 8) {
+                            distanceChip("You", formatETA(ranked.etaFromA))
+                            distanceChip("Friend", formatETA(ranked.etaFromB))
+                            distanceChip("Gap", formatETA(ranked.fairnessGap))
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            distanceChip("You", distanceFrom(savedCoordinate, to: item))
+                            distanceChip("Friend", distanceFrom(peerCoordinate, to: item))
+                            distanceChip("Middle", distanceFrom(midpointCoordinate, to: item))
+                        }
                     }
                 }
                 Spacer(minLength: 0)
@@ -540,25 +585,45 @@ struct OnboardingView: View {
             request.region = region
         }
 
+        let a = savedCoordinate
+        let b = peerCoordinate
+
         Task {
             do {
                 let response = try await MKLocalSearch(request: request).start()
                 let items = Array(response.mapItems.prefix(6))
                 await MainActor.run {
                     searchResults = items
+                    rankedSpots = []
                     selectedPlace = items.first
                     searchError = items.isEmpty ? "No places found nearby" : nil
                     panelDetent = .medium
                     focusOnPlacesAndPeople()
                 }
+                // Fairness ranking needs both endpoints. If we have them, replace the
+                // raw search order with drive-time fairness; otherwise leave as is.
+                guard let a, let b, !items.isEmpty else { return }
+                let ranked = await FairnessRanker.rank(candidates: items, from: a, and: b)
+                await MainActor.run {
+                    rankedSpots = ranked
+                    let rankedItems = ranked.map(\.item)
+                    let unranked = items.filter { item in !rankedItems.contains(where: { $0 == item }) }
+                    searchResults = rankedItems + unranked
+                    selectedPlace = searchResults.first
+                }
             } catch {
                 await MainActor.run {
                     searchResults = []
+                    rankedSpots = []
                     selectedPlace = nil
                     searchError = "Search failed"
                 }
             }
         }
+    }
+
+    private func rankedSpot(for item: MKMapItem) -> RankedSpot? {
+        rankedSpots.first { $0.item == item }
     }
 
     private func focusOnPlacesAndPeople() {
@@ -597,6 +662,11 @@ struct OnboardingView: View {
     private func distanceFrom(_ coordinate: CLLocationCoordinate2D?, to item: MKMapItem) -> String? {
         guard let coordinate, let destination = item.placemark.location?.coordinate else { return nil }
         return formatDistance(from: coordinate, to: destination)
+    }
+
+    private func formatETA(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        return "\(minutes) min"
     }
 
     private func sameCoordinate(_ lhs: CLLocationCoordinate2D?, _ rhs: CLLocationCoordinate2D?) -> Bool {
