@@ -39,6 +39,9 @@ struct OnboardingView: View {
     @State private var pendingShare: ShareIntent?
     @State private var detailItem: MKMapItem?
     @State private var selectedCategory: CategoryPreset?
+    @State private var showTutorial = !OnboardingFlags.hasSeenOnboarding
+    @State private var showShareSheet = false
+    @State private var monitor = NetworkMonitor()
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
 
@@ -64,6 +67,10 @@ struct OnboardingView: View {
                 bottomPanel
             }
             .ignoresSafeArea(edges: .bottom)
+
+            if showTutorial {
+                tutorialOverlay
+            }
         }
         .onAppear(perform: prepareInitialMap)
         .onChange(of: scenePhase) { _, newPhase in
@@ -72,6 +79,9 @@ struct OnboardingView: View {
         }
         .task {
             await pollSharedLocations()
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: [Self.inviteMessage])
         }
     }
 
@@ -319,6 +329,11 @@ struct OnboardingView: View {
                 if panelDetent == .peek {
                     peekSummary
                 } else {
+                    if !monitor.isOnline {
+                        offlineBanner
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: Tokens.Space.s1) {
                             Text("Tween")
@@ -329,6 +344,16 @@ struct OnboardingView: View {
                         }
 
                         Spacer()
+
+                        Button {
+                            withAnimation(Tokens.Motion.spring) { showTutorial = true }
+                        } label: {
+                            Image(systemName: "info.circle")
+                                .font(Tokens.Typography.title)
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("About Tween")
 
                         Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
                             .font(Tokens.Typography.title)
@@ -400,6 +425,7 @@ struct OnboardingView: View {
             .tweenElevation(Tokens.Elevation.sheet)
             .gesture(panelDragGesture)
             .animation(Tokens.Motion.spring, value: panelDetent)
+            .animation(Tokens.Motion.spring, value: monitor.isOnline)
             .alert(
                 editorMode?.alertTitle ?? "",
                 isPresented: Binding(
@@ -441,6 +467,57 @@ struct OnboardingView: View {
             .frame(width: 42, height: 5)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 2)
+    }
+
+    private var offlineBanner: some View {
+        HStack(spacing: Tokens.Space.s2) {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(Tokens.Palette.warning)
+            Text("Offline — search needs a connection")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.onSurface)
+            Spacer()
+        }
+        .padding(.horizontal, Tokens.Space.s3)
+        .padding(.vertical, Tokens.Space.s2)
+        .background(Tokens.Palette.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+                .stroke(Tokens.Palette.warning.opacity(0.30), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var inviteFriendsRow: some View {
+        Button {
+            showShareSheet = true
+        } label: {
+            HStack(spacing: Tokens.Space.s3) {
+                ZStack {
+                    Circle().fill(Tokens.Palette.brandMuted)
+                    Image(systemName: "person.badge.plus")
+                        .font(Tokens.Typography.callout.weight(.semibold))
+                        .foregroundStyle(Tokens.Palette.brand)
+                }
+                .frame(width: 36, height: 36)
+                Text("Invite friends to Tween")
+                    .font(Tokens.Typography.headline)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(Tokens.Typography.iconBadge)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
+            .padding(Tokens.Space.s3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                    .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Invite friends to Tween")
     }
 
     @ViewBuilder
@@ -781,8 +858,10 @@ struct OnboardingView: View {
 
             if friends.isEmpty {
                 waitingEmptyState
+                inviteFriendsRow
             } else {
                 friendList
+                inviteFriendsRow
                 Button(action: imInForGroup) {
                     HStack(spacing: Tokens.Space.s2) {
                         if isRequesting {
@@ -1521,6 +1600,119 @@ private enum MapDisplayMode: String, CaseIterable, Identifiable {
         case .satellite: "map.fill"
         }
     }
+}
+
+// MARK: - Tutorial overlay + invite share sheet
+
+extension OnboardingView {
+    static let inviteMessage =
+        "Let's meet in the middle. Try Tween: https://github.com/kavigandham/tween"
+
+    var tutorialOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .onTapGesture { dismissTutorial() }
+
+            TutorialCard(onGetStarted: dismissTutorial)
+                .padding(Tokens.Space.s4)
+                .transition(.scale(scale: 0.92).combined(with: .opacity))
+        }
+        .animation(Tokens.Motion.spring, value: showTutorial)
+    }
+
+    private func dismissTutorial() {
+        OnboardingFlags.hasSeenOnboarding = true
+        withAnimation(Tokens.Motion.spring) {
+            showTutorial = false
+        }
+    }
+}
+
+/// First-launch welcome card. Single screen, dismissable, re-openable from the panel's
+/// info button. Three bullet rows summarise what Tween does end-to-end.
+private struct TutorialCard: View {
+    let onGetStarted: () -> Void
+
+    var body: some View {
+        VStack(spacing: Tokens.Space.s4) {
+            ZStack {
+                Circle().fill(Tokens.Palette.brandMuted)
+                Image(systemName: "star.fill")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(Tokens.Palette.brand)
+            }
+            .frame(width: 64, height: 64)
+
+            VStack(spacing: Tokens.Space.s2) {
+                Text("Welcome to Tween")
+                    .font(Tokens.Typography.title)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                Text("Find a fair meetup spot with a friend, right from your iMessage.")
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(alignment: .leading, spacing: Tokens.Space.s3) {
+                tutorialRow(
+                    icon: "map.fill",
+                    text: "Find a fair midpoint to meet your friend."
+                )
+                tutorialRow(
+                    icon: "location.fill",
+                    text: "Share your location once — Tween calculates the rest."
+                )
+                tutorialRow(
+                    icon: "paperplane.fill",
+                    text: "Send the chosen spot right into your iMessage thread."
+                )
+            }
+            .padding(.vertical, Tokens.Space.s2)
+
+            Button(action: onGetStarted) {
+                Text("Get started")
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+        .padding(Tokens.Space.s5)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.sheet))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.sheet)
+                .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+        }
+        .tweenElevation(Tokens.Elevation.sheet)
+    }
+
+    private func tutorialRow(icon: String, text: String) -> some View {
+        HStack(spacing: Tokens.Space.s3) {
+            ZStack {
+                Circle().fill(Tokens.Palette.brandMuted)
+                Image(systemName: icon)
+                    .font(Tokens.Typography.callout.weight(.semibold))
+                    .foregroundStyle(Tokens.Palette.brand)
+            }
+            .frame(width: 32, height: 32)
+            Text(text)
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// Thin SwiftUI wrapper around `UIActivityViewController` for the invite-friend share sheet.
+private struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 private enum HomePanelTab: String, CaseIterable, Identifiable {

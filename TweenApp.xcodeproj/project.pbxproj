@@ -29,6 +29,10 @@
 		AA000000000000000000010C /* TweenPin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000206 /* TweenPin.swift */; };
 		AA000000000000000000010D /* OutgoingDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000207 /* OutgoingDraft.swift */; };
 		AA000000000000000000010E /* OutgoingDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000207 /* OutgoingDraft.swift */; };
+		AA000000000000000000010F /* OnboardingFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000208 /* OnboardingFlags.swift */; };
+		AA0000000000000000000110 /* OnboardingFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000208 /* OnboardingFlags.swift */; };
+		AA0000000000000000000111 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000209 /* NetworkMonitor.swift */; };
+		AA0000000000000000000112 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000209 /* NetworkMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +91,8 @@
 		AA0000000000000000000205 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
 		AA0000000000000000000206 /* TweenPin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweenPin.swift; sourceTree = "<group>"; };
 		AA0000000000000000000207 /* OutgoingDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutgoingDraft.swift; sourceTree = "<group>"; };
+		AA0000000000000000000208 /* OnboardingFlags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingFlags.swift; sourceTree = "<group>"; };
+		AA0000000000000000000209 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -186,6 +192,8 @@
 				AA0000000000000000000205 /* Tokens.swift */,
 				AA0000000000000000000206 /* TweenPin.swift */,
 				AA0000000000000000000207 /* OutgoingDraft.swift */,
+				AA0000000000000000000208 /* OnboardingFlags.swift */,
+				AA0000000000000000000209 /* NetworkMonitor.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -383,6 +391,8 @@
 				AA0000000000000000000109 /* Tokens.swift in Sources */,
 				AA000000000000000000010B /* TweenPin.swift in Sources */,
 				AA000000000000000000010D /* OutgoingDraft.swift in Sources */,
+				AA000000000000000000010F /* OnboardingFlags.swift in Sources */,
+				AA0000000000000000000111 /* NetworkMonitor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -415,6 +425,8 @@
 				AA000000000000000000010A /* Tokens.swift in Sources */,
 				AA000000000000000000010C /* TweenPin.swift in Sources */,
 				AA000000000000000000010E /* OutgoingDraft.swift in Sources */,
+				AA0000000000000000000110 /* OnboardingFlags.swift in Sources */,
+				AA0000000000000000000112 /* NetworkMonitor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
