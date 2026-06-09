@@ -22,8 +22,8 @@ struct OnboardingView: View {
     @State private var searchError: String?
     @State private var panelDetent: PanelDetent = .medium
     @State private var panelTab: HomePanelTab = .map
-    @State private var position = MapCameraPosition.region(OnboardingView.defaultFramedRegion)
-    @State private var lastVisibleRegion = OnboardingView.defaultFramedRegion
+    @State private var position: MapCameraPosition
+    @State private var lastVisibleRegion: MKCoordinateRegion
 
     /// The country-level fallback region used on a fresh launch (no cached coordinate)
     /// and as the seed for `lastVisibleRegion` before the user pans. Continental US.
@@ -31,6 +31,18 @@ struct OnboardingView: View {
         center: CLLocationCoordinate2D(latitude: 39.8283, longitude: -98.5795),
         span: MKCoordinateSpan(latitudeDelta: 35, longitudeDelta: 55)
     )
+
+    /// Neighbourhood-scale span used when we open at the user's cached location.
+    private static let neighbourhoodSpan = MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
+
+    init() {
+        let cached = LocationCache.load()
+        let initialRegion = cached.map {
+            MKCoordinateRegion(center: $0, span: Self.neighbourhoodSpan)
+        } ?? Self.defaultFramedRegion
+        _position = State(initialValue: .region(initialRegion))
+        _lastVisibleRegion = State(initialValue: initialRegion)
+    }
     @State private var mapDisplayMode: MapDisplayMode = .standard
     @State private var showsTraffic = false
     @State private var friends: [TweenFriend] = FriendRoster.load()
@@ -1343,6 +1355,18 @@ struct OnboardingView: View {
 
     private func prepareInitialMap() {
         refreshSavedLocation(forceFocus: true)
+        silentlyRefreshLocationIfAuthorized()
+    }
+
+    /// Fire a one-shot location request at launch when permission is already granted, so
+    /// the map smoothly updates from "where I was last time" to "where I am now." Never
+    /// triggers the system permission prompt — that stays a deliberate user tap.
+    private func silentlyRefreshLocationIfAuthorized() {
+        provider.requestOnceIfAuthorized { coordinate in
+            guard let coordinate else { return }
+            savedCoordinate = coordinate
+            focusOnPeople()
+        }
     }
 
     private func refreshSavedLocation(forceFocus: Bool = false) {

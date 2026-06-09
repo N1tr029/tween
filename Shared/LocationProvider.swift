@@ -48,6 +48,18 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Like `requestOnce`, but a no-op when authorisation is `.notDetermined` / `.denied` /
+    /// `.restricted`. Used by the app's launch-time silent refresh — never want to fire the
+    /// system permission prompt without an explicit user tap.
+    func requestOnceIfAuthorized(completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
+        let auth = manager.authorizationStatus
+        guard auth == .authorizedWhenInUse || auth == .authorizedAlways else {
+            completion?(nil)
+            return
+        }
+        requestOnce(completion: completion)
+    }
+
     // MARK: - CLLocationManagerDelegate
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
