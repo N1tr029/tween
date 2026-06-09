@@ -24,6 +24,7 @@ struct TweenPin: View {
                     Image(systemName: symbol)
                         .font(.system(size: iconSize, weight: .bold))
                         .foregroundStyle(.white)
+                        .symbolEffect(.pulse, options: .speed(0.6).repeat(2), value: role)
                 }
                 .overlay {
                     Circle().stroke(.white, lineWidth: ringWidth)

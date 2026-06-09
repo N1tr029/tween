@@ -37,7 +37,9 @@ struct OnboardingView: View {
     @State private var editorMode: FriendEditor?
     @State private var editorName: String = ""
     @State private var pendingShare: ShareIntent?
+    @State private var detailItem: MKMapItem?
     @FocusState private var searchFocused: Bool
+    @Namespace private var spotTransition
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -240,6 +242,7 @@ struct OnboardingView: View {
             } label: {
                 Image(systemName: mapDisplayMode.systemImage)
                     .font(Tokens.Typography.headline)
+                    .symbolEffect(.bounce, value: mapDisplayMode)
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
@@ -251,6 +254,7 @@ struct OnboardingView: View {
                 Image(systemName: showsTraffic ? "car.fill" : "car")
                     .font(Tokens.Typography.headline)
                     .foregroundStyle(showsTraffic ? .white : Tokens.Palette.onSurface)
+                    .symbolEffect(.bounce, value: showsTraffic)
                     .frame(width: 42, height: 42)
                     .background(showsTraffic ? Tokens.Palette.brand : Color.clear, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
             }
@@ -263,6 +267,7 @@ struct OnboardingView: View {
             Button(action: resetMap) {
                 Image(systemName: "location.north.line.fill")
                     .font(Tokens.Typography.headline)
+                    .symbolEffect(.bounce, value: searchResults.count)
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
@@ -318,7 +323,21 @@ struct OnboardingView: View {
 
                     switch panelTab {
                     case .map:
-                        if !searchResults.isEmpty {
+                        if let detailItem {
+                            SpotDetail(
+                                item: detailItem,
+                                ranked: rankedSpot(for: detailItem),
+                                symbol: placeIcon(for: detailItem),
+                                categoryTint: placeColor(for: detailItem),
+                                typeLabel: placeTypeLabel(for: detailItem),
+                                youDistance: distanceFrom(savedCoordinate, to: detailItem),
+                                friendDistance: distanceFrom(peerCoordinate, to: detailItem),
+                                namespace: spotTransition,
+                                onShowOnMap: { showOnMap(detailItem) },
+                                onOpenInMaps: { openInMaps(detailItem) },
+                                onClose: closeDetail
+                            )
+                        } else if !searchResults.isEmpty {
                             placeResultsList
                         } else if let searchError {
                             Label(searchError, systemImage: "exclamationmark.triangle.fill")
@@ -382,6 +401,7 @@ struct OnboardingView: View {
             } message: {
                 Text("Tween will capture your location once and use it to find a fair meetup spot.")
             }
+            .sensoryFeedback(.selection, trigger: detailItem)
         }
     }
 
@@ -431,6 +451,9 @@ struct OnboardingView: View {
     private var actionControls: some View {
         VStack(spacing: Tokens.Space.s2) {
             primaryCTA
+                .animation(Tokens.Motion.spring, value: isRequesting)
+                .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
+                .animation(Tokens.Motion.spring, value: peerCoordinate?.latitude)
 
             if savedCoordinate != nil {
                 Button(action: leaveTween) {
@@ -461,11 +484,14 @@ struct OnboardingView: View {
             .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
         } else if peerCoordinate == nil {
             Button { pendingShare = .update } label: {
-                HStack {
+                HStack(spacing: Tokens.Space.s2) {
                     if isRequesting {
-                        ProgressView().tint(.white)
+                        ProgressView()
+                            .tint(.white)
+                            .transition(.scale.combined(with: .opacity))
                     }
                     Text("Share your location")
+                        .contentTransition(.numericText())
                 }
             }
             .buttonStyle(.tweenPrimary)
@@ -477,9 +503,11 @@ struct OnboardingView: View {
                 }
                 searchFocused = true
             } label: {
-                HStack {
+                HStack(spacing: Tokens.Space.s2) {
                     Image(systemName: "sparkles")
+                        .symbolEffect(.bounce, value: peerCoordinate?.latitude)
                     Text("Find the fair spot")
+                        .contentTransition(.numericText())
                 }
             }
             .buttonStyle(.tweenPrimary)
@@ -580,13 +608,20 @@ struct OnboardingView: View {
             } else {
                 friendList
                 Button(action: imInForGroup) {
-                    HStack {
-                        if isRequesting { ProgressView().tint(.white) }
+                    HStack(spacing: Tokens.Space.s2) {
+                        if isRequesting {
+                            ProgressView()
+                                .tint(.white)
+                                .transition(.scale.combined(with: .opacity))
+                        }
                         Text(savedCoordinate == nil ? "Share my location" : "I'm in")
+                            .contentTransition(.numericText())
                     }
                 }
                 .buttonStyle(.tweenPrimary)
                 .disabled(isRequesting)
+                .animation(Tokens.Motion.spring, value: isRequesting)
+                .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
             }
         }
     }
@@ -676,10 +711,11 @@ struct OnboardingView: View {
             categoryTint: placeColor(for: item),
             typeLabel: placeTypeLabel(for: item),
             youDistance: distanceFrom(savedCoordinate, to: item),
-            friendDistance: distanceFrom(peerCoordinate, to: item)
+            friendDistance: distanceFrom(peerCoordinate, to: item),
+            namespace: spotTransition
         )
         .contentShape(RoundedRectangle(cornerRadius: Tokens.Radius.card))
-        .onTapGesture { selectPlaceOnMap(item) }
+        .onTapGesture { openDetail(item) }
     }
 
     @ViewBuilder
@@ -821,6 +857,36 @@ struct OnboardingView: View {
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .peek
         }
+    }
+
+    private func openDetail(_ item: MKMapItem) {
+        withAnimation(Tokens.Motion.spring) {
+            detailItem = item
+            selectedPlace = item
+        }
+    }
+
+    private func showOnMap(_ item: MKMapItem) {
+        if let coordinate = item.placemark.location?.coordinate {
+            centerMap(on: coordinate, avoidingBottomOverlay: true)
+        }
+        withAnimation(Tokens.Motion.spring) {
+            detailItem = nil
+            selectedPlace = item
+            panelDetent = .peek
+        }
+    }
+
+    private func closeDetail() {
+        withAnimation(Tokens.Motion.spring) {
+            detailItem = nil
+        }
+    }
+
+    private func openInMaps(_ item: MKMapItem) {
+        item.openInMaps(launchOptions: [
+            MKLaunchOptionsMapTypeKey: NSNumber(value: MKMapType.standard.rawValue)
+        ])
     }
 
     private func leaveTween() {
@@ -1366,6 +1432,7 @@ private struct ResultRow: View {
     let typeLabel: String
     let youDistance: String?
     let friendDistance: String?
+    let namespace: Namespace.ID
 
     var body: some View {
         HStack(alignment: .center, spacing: Tokens.Space.s3) {
@@ -1377,12 +1444,14 @@ private struct ResultRow: View {
                     .foregroundStyle(.white)
             }
             .frame(width: 36, height: 36)
+            .matchedGeometryEffect(id: matchedSymbolId(for: item), in: namespace)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name ?? "Place")
                     .font(Tokens.Typography.headline)
                     .foregroundStyle(Tokens.Palette.onSurface)
                     .lineLimit(1)
+                    .matchedGeometryEffect(id: matchedNameId(for: item), in: namespace)
                 Text(typeLabel)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.Palette.onSurfaceMuted)
@@ -1397,12 +1466,14 @@ private struct ResultRow: View {
                     friendValue: formatETA(ranked.etaFromB),
                     isBalanced: isBalanced(ranked)
                 )
+                .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
             } else {
                 ETAChip(
                     selfValue: youDistance ?? "—",
                     friendValue: friendDistance ?? "—",
                     isBalanced: false
                 )
+                .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
             }
         }
         .padding(.horizontal, Tokens.Space.s3)
@@ -1418,6 +1489,113 @@ private struct ResultRow: View {
                     isSelected ? Tokens.Palette.brand.opacity(0.55) : Tokens.Palette.glassStroke,
                     lineWidth: isSelected ? 1.5 : 1
                 )
+        }
+    }
+
+    private func formatETA(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        return "\(minutes)m"
+    }
+
+    private func isBalanced(_ spot: RankedSpot) -> Bool {
+        spot.fairnessGap < 0.2 * max(spot.worseETA, 1)
+    }
+}
+
+/// Stable matched-geometry IDs shared between ResultRow and SpotDetail. The key is the
+/// MKMapItem's `hash` so the same item morphs into the same detail no matter where it sits
+/// in the list.
+private func matchedSymbolId(for item: MKMapItem) -> String { "spot-symbol-\(item.hash)" }
+private func matchedNameId(for item: MKMapItem) -> String { "spot-name-\(item.hash)" }
+private func matchedChipId(for item: MKMapItem) -> String { "spot-chip-\(item.hash)" }
+
+/// Detail card that takes over the bottom panel when a result is selected. Composed from
+/// the same primitives as ResultRow so matchedGeometryEffect can morph between them.
+private struct SpotDetail: View {
+    let item: MKMapItem
+    let ranked: RankedSpot?
+    let symbol: String
+    let categoryTint: Color
+    let typeLabel: String
+    let youDistance: String?
+    let friendDistance: String?
+    let namespace: Namespace.ID
+    let onShowOnMap: () -> Void
+    let onOpenInMaps: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s4) {
+            HStack(alignment: .top, spacing: Tokens.Space.s3) {
+                ZStack {
+                    Circle()
+                        .fill(ranked != nil ? Tokens.Palette.brand : categoryTint)
+                    Image(systemName: symbol)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 56, height: 56)
+                .matchedGeometryEffect(id: matchedSymbolId(for: item), in: namespace)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name ?? "Place")
+                        .font(Tokens.Typography.title)
+                        .foregroundStyle(Tokens.Palette.onSurface)
+                        .lineLimit(2)
+                        .matchedGeometryEffect(id: matchedNameId(for: item), in: namespace)
+                    Text(typeLabel)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                }
+
+                Spacer(minLength: 0)
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(Tokens.Typography.title)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close detail")
+            }
+
+            if let address = item.placemark.title {
+                Text(address)
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .lineLimit(3)
+            }
+
+            HStack {
+                Spacer()
+                ETAChip(
+                    selfValue: ranked.map { formatETA($0.etaFromA) } ?? (youDistance ?? "—"),
+                    friendValue: ranked.map { formatETA($0.etaFromB) } ?? (friendDistance ?? "—"),
+                    isBalanced: ranked.map(isBalanced) ?? false
+                )
+                .scaleEffect(1.2)
+                .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
+                Spacer()
+            }
+            .padding(.vertical, Tokens.Space.s2)
+
+            VStack(spacing: Tokens.Space.s2) {
+                Button(action: onShowOnMap) {
+                    HStack {
+                        Image(systemName: "scope")
+                        Text("Show on map")
+                    }
+                }
+                .buttonStyle(.tweenPrimary)
+
+                Button(action: onOpenInMaps) {
+                    HStack {
+                        Image(systemName: "arrow.up.right.square")
+                        Text("Open in Maps")
+                    }
+                }
+                .buttonStyle(.tweenSubtle)
+            }
         }
     }
 
