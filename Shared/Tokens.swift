@@ -31,6 +31,19 @@ enum Tokens {
         // Glass
         static let glassStroke = Color.primary.opacity(0.08)
         static let glassShadow = Color.black.opacity(0.18)
+
+        /// UIColor mirrors of the brand palette, for code paths that draw with UIKit
+        /// (UIBezierPath / UIGraphicsImageRenderer / NSAttributedString). Keep these in
+        /// sync with the SwiftUI Color values above.
+        enum UIKit {
+            static let brand = UIColor(red: 0.13, green: 0.55, blue: 0.55, alpha: 1)
+            static let pinSelf = UIColor.systemBlue
+            static let pinFriend = UIColor.systemOrange
+            static let pinMidpoint = brand
+            static let onSurface = UIColor.label
+            static let onSurfaceMuted = UIColor.secondaryLabel
+            static let surface = UIColor.secondarySystemBackground
+        }
     }
 
     /// 4-pt grid. Pick the smallest token that holds — the tightness is usually right.

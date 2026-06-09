@@ -28,40 +28,66 @@ struct CompactView: View {
         state == .placeholder ? nil : state.coordinate
     }
 
+    private var summaryText: String {
+        state == .placeholder ? "meet in the middle" : state.text
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             TweenMapSnapshotView(received: receivedCoordinate, cachedCoordinate: nil)
 
-            HStack(spacing: 10) {
+            HStack(spacing: Tokens.Space.s2) {
                 Button(action: onTap) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(state.text)
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text("Open map")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.blue)
+                    HStack(spacing: Tokens.Space.s2) {
+                        ZStack {
+                            Circle()
+                                .fill(Tokens.Palette.brand)
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 22, height: 22)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Tween")
+                                .font(Tokens.Typography.captionEmphasized)
+                                .foregroundStyle(Tokens.Palette.onSurface)
+                            Text(summaryText)
+                                .font(Tokens.Typography.caption)
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        Image(systemName: "chevron.up.right")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
 
                 Button(action: onImIn) {
-                    Text("Send I'm in")
-                        .font(.caption.weight(.bold))
+                    Text("I'm in")
+                        .font(Tokens.Typography.captionEmphasized)
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .padding(.horizontal, 12)
-                        .frame(height: 36)
-                        .background(.blue, in: RoundedRectangle(cornerRadius: 8))
+                        .minimumScaleFactor(0.78)
+                        .padding(.horizontal, Tokens.Space.s3)
+                        .frame(height: 32)
+                        .background(Tokens.Palette.brand, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, Tokens.Space.s3)
+            .padding(.vertical, Tokens.Space.s2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.regularMaterial)
+            .overlay(alignment: .top) {
+                Divider()
+                    .background(Tokens.Palette.glassStroke)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -92,40 +118,40 @@ struct ExpandedView: View {
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
                 HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Tokens.Space.s1) {
                         Text("Tween")
-                            .font(.largeTitle.bold())
+                            .font(Tokens.Typography.display)
                         Text(received?.text ?? "Meet in the middle")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
+                            .font(Tokens.Typography.headline)
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                             .lineLimit(1)
                         if let received, let cachedCoordinate {
                             Text("\(formatDistance(from: received.coordinate, to: cachedCoordinate)) apart")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
+                                .font(Tokens.Typography.callout.weight(.semibold))
+                                .foregroundStyle(Tokens.Palette.onSurface)
                         }
                     }
 
                     Spacer()
 
                     Image(systemName: cachedCoordinate == nil ? "location.slash" : "location.fill")
-                        .font(.title2)
-                        .foregroundStyle(cachedCoordinate == nil ? Color.secondary : Color.blue)
+                        .font(Tokens.Typography.title)
+                        .foregroundStyle(cachedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.pinSelf)
                 }
 
-                HStack(spacing: 10) {
+                HStack(spacing: Tokens.Space.s2 + 2) {
                     locationBadge(
                         title: "Meetup",
                         coordinate: received?.coordinate,
-                        color: .orange,
+                        color: Tokens.Palette.pinFriend,
                         emptyText: "No meetup yet"
                     )
                     locationBadge(
                         title: "You",
                         coordinate: cachedCoordinate,
-                        color: .blue,
+                        color: Tokens.Palette.pinSelf,
                         emptyText: "No dot yet"
                     )
                 }
@@ -135,38 +161,34 @@ struct ExpandedView: View {
                 }
 
                 Button(action: onImIn) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: Tokens.Space.s2) {
                         if isRequesting { ProgressView().tint(.white) }
                         Text(cachedCoordinate == nil ? "Share location & add bubble" : "Send I'm in to chat")
-                            .font(.headline)
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
                 }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .buttonStyle(.tweenPrimary)
                 .disabled(isRequesting)
 
                 Text("After the bubble appears in Messages, tap the blue send arrow.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
-            .padding(16)
+            .padding(Tokens.Space.s4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-            .padding(12)
+            .tweenGlass(cornerRadius: Tokens.Radius.sheet)
+            .padding(Tokens.Space.s3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var fairSpotsRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Tokens.Space.s1 + 2) {
             Text("Fair meetup spots")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(Tokens.Typography.captionEmphasized)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: Tokens.Space.s2) {
                     ForEach(Array(topSpots.enumerated()), id: \.offset) { offset, spot in
                         fairSpotChip(rank: offset + 1, spot: spot)
                     }
@@ -178,25 +200,35 @@ struct ExpandedView: View {
     private func fairSpotChip(rank: Int, spot: RankedSpot) -> some View {
         let aMin = Int((spot.etaFromA / 60).rounded())
         let bMin = Int((spot.etaFromB / 60).rounded())
-        return HStack(spacing: 8) {
-            Text("\(rank)")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 18, height: 18)
-                .background(rank == 1 ? Color.orange : Color.secondary, in: Circle())
+        let isTop = rank == 1
+        return HStack(spacing: Tokens.Space.s2) {
+            ZStack {
+                Circle()
+                    .fill(isTop ? Tokens.Palette.brand : Tokens.Palette.onSurfaceMuted)
+                if isTop {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                } else {
+                    Text("\(rank)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 18, height: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(spot.item.name ?? "Place")
-                    .font(.caption.weight(.semibold))
+                    .font(Tokens.Typography.captionEmphasized)
                     .lineLimit(1)
                 Text("You \(aMin)m · Friend \(bMin)m")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, Tokens.Space.s2 + 2)
+        .padding(.vertical, Tokens.Space.s1 + 2)
+        .background(isTop ? Tokens.Palette.brandMuted : Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2))
     }
 
     private func locationBadge(
@@ -205,27 +237,27 @@ struct ExpandedView: View {
         color: Color,
         emptyText: String
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Tokens.Space.s1 + 2) {
+            HStack(spacing: Tokens.Space.s1 + 2) {
                 Circle()
                     .fill(color)
                     .frame(width: 8, height: 8)
                 Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             }
 
             Text(
                 coordinate.map { formatCoordinate(latitude: $0.latitude, longitude: $0.longitude) }
                     ?? emptyText
             )
-            .font(.caption)
+            .font(Tokens.Typography.caption)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
         }
-        .padding(10)
+        .padding(Tokens.Space.s2 + 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
     }
 }
 
@@ -328,18 +360,38 @@ private struct TweenMapSnapshotView: View {
             if let received, let cachedCoordinate {
                 drawLine(from: snapshot.point(for: received), to: snapshot.point(for: cachedCoordinate))
             }
-            // Ranked spots: small accent pins under the endpoint pins. Rank-1 stands out.
+            // Ranked spots: rank-1 gets the brand midpoint star; the rest are muted dots.
             for (index, coord) in rankedCoordinates.enumerated() {
-                let color: UIColor = index == 0 ? .systemOrange : .systemGray2
-                drawSmallPin(at: snapshot.point(for: coord), color: color)
+                if index == 0 {
+                    drawMidpointStar(at: snapshot.point(for: coord))
+                } else {
+                    drawSmallPin(at: snapshot.point(for: coord), color: Tokens.Palette.UIKit.onSurfaceMuted)
+                }
             }
             if let received {
-                drawDot(at: snapshot.point(for: received), color: .systemOrange)
+                drawDot(at: snapshot.point(for: received), color: Tokens.Palette.UIKit.pinFriend)
             }
             if let cachedCoordinate {
-                drawDot(at: snapshot.point(for: cachedCoordinate), color: .systemBlue)
+                drawDot(at: snapshot.point(for: cachedCoordinate), color: Tokens.Palette.UIKit.pinSelf)
             }
         }
+    }
+
+    private func drawMidpointStar(at point: CGPoint) {
+        let color = Tokens.Palette.UIKit.pinMidpoint
+        let halo = CGRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32)
+        let dot = CGRect(x: point.x - 11, y: point.y - 11, width: 22, height: 22)
+        color.withAlphaComponent(0.22).setFill()
+        UIBezierPath(ovalIn: halo).fill()
+        UIColor.white.setFill()
+        UIBezierPath(ovalIn: dot.insetBy(dx: -3, dy: -3)).fill()
+        color.setFill()
+        UIBezierPath(ovalIn: dot).fill()
+
+        let star = UIImage(systemName: "star.fill")?
+            .withTintColor(.white, renderingMode: .alwaysOriginal)
+        let starRect = CGRect(x: point.x - 7, y: point.y - 7, width: 14, height: 14)
+        star?.draw(in: starRect)
     }
 
     private func drawSmallPin(at point: CGPoint, color: UIColor) {
@@ -357,7 +409,7 @@ private struct TweenMapSnapshotView: View {
         let path = UIBezierPath()
         path.move(to: start)
         path.addLine(to: end)
-        UIColor.systemBlue.withAlphaComponent(0.7).setStroke()
+        Tokens.Palette.UIKit.pinSelf.withAlphaComponent(0.7).setStroke()
         path.lineWidth = 4
         path.lineCapStyle = .round
         path.setLineDash([8, 7], count: 2, phase: 0)

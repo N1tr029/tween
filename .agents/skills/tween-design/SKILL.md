@@ -69,6 +69,10 @@ Defined in `Shared/Tokens.swift` and shared between `TweenApp` and `TweenMessage
 
 `chip`, `card`, `sheet`, `pin`, `pill`. `pill` is `.infinity` for capsules.
 
+### `Tokens.Palette.UIKit` — UIColor bridge
+
+For code paths that draw with UIKit (`UIBezierPath`, `UIGraphicsImageRenderer`, `NSAttributedString`) the brand palette is mirrored under `Tokens.Palette.UIKit.*` as `UIColor` values. Same source of truth, two representations — keep them in sync by editing both blocks in `Shared/Tokens.swift` together.
+
 ### `Tokens.Typography` — typography
 
 Semantic, not size-based: `display`, `title`, `headline`, `body`, `callout`, `caption`, `captionEmphasized`, `mono`. All resolve to `Font` values built from system Dynamic Type with weight overrides — accessibility is free. (Named `Typography` rather than `Type` because `Type` collides with Swift's metatype keyword.)

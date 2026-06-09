@@ -228,14 +228,51 @@ final class MessagesViewController: MSMessagesAppViewController {
 
     private func send(_ newState: TweenState) {
         guard let conversation = activeConversation else { return }
+        let selfCoord = LocationCache.load()
+        let peer = newState.coordinate
+        let chosen = rankedSpots.first
+        let sessionFromTap = conversation.selectedMessage?.session
 
+        Task { [weak self] in
+            let bubbleImage = await BubbleImageRenderer.makeImage(
+                selfCoord: selfCoord,
+                peer: peer,
+                chosenSpot: chosen
+            )
+            await MainActor.run {
+                guard let self else { return }
+                self.insertBubble(
+                    into: conversation,
+                    newState: newState,
+                    chosen: chosen,
+                    selfCoord: selfCoord,
+                    peer: peer,
+                    image: bubbleImage,
+                    session: sessionFromTap
+                )
+            }
+        }
+    }
+
+    private func insertBubble(
+        into conversation: MSConversation,
+        newState: TweenState,
+        chosen: RankedSpot?,
+        selfCoord: CLLocationCoordinate2D?,
+        peer: CLLocationCoordinate2D,
+        image: UIImage?,
+        session: MSSession?
+    ) {
         let layout = MSMessageTemplateLayout()
-        layout.caption = newState.text
+        layout.image = image
+        layout.imageTitle = chosen?.item.name ?? newState.text
+        layout.caption = Self.bubbleCaption(chosen: chosen, selfCoord: selfCoord, peer: peer)
         layout.subcaption = formatCoordinate(latitude: newState.latitude, longitude: newState.longitude)
+        layout.trailingCaption = "Tween"
 
         // Reuse the tapped message's session so the existing bubble updates in place
         // (GamePigeon style); start a new session when composing fresh.
-        let message = MSMessage(session: conversation.selectedMessage?.session ?? MSSession())
+        let message = MSMessage(session: session ?? MSSession())
         message.url = newState.encodedURL()
         message.layout = layout
 
@@ -243,5 +280,22 @@ final class MessagesViewController: MSMessagesAppViewController {
             if let error { NSLog("Tween: failed to insert message: \(error.localizedDescription)") }
         }
         requestPresentationStyle(.compact)
+    }
+
+    private static func bubbleCaption(
+        chosen: RankedSpot?,
+        selfCoord: CLLocationCoordinate2D?,
+        peer: CLLocationCoordinate2D
+    ) -> String {
+        if let chosen {
+            let you = Int((chosen.etaFromA / 60).rounded())
+            let friend = Int((chosen.etaFromB / 60).rounded())
+            let name = chosen.item.name ?? "the spot"
+            return "Meet at \(name) · You \(you)m · Friend \(friend)m"
+        }
+        if let selfCoord {
+            return "I'm in · \(formatDistance(from: selfCoord, to: peer)) apart"
+        }
+        return "I'm in"
     }
 }
