@@ -76,6 +76,8 @@ struct CompactView: View {
                         .font(Tokens.Typography.captionEmphasized)
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                        // Compact extension viewport — keyboard height is fixed.
+                        // Tightening is preferable to truncation at AX sizes.
                         .minimumScaleFactor(0.78)
                         .padding(.horizontal, Tokens.Space.s3)
                         .frame(height: 32)
@@ -300,6 +302,8 @@ struct ExpandedView: View {
             )
             .font(Tokens.Typography.caption)
             .lineLimit(1)
+            // Coordinate strings are fixed-format ("12.3456, -98.7654") and the badge
+            // is a fixed-width grid item — tighten before truncating.
             .minimumScaleFactor(0.8)
         }
         .padding(Tokens.Space.s2 + 2)

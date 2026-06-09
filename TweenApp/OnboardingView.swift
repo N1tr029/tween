@@ -44,6 +44,7 @@ struct OnboardingView: View {
     @State private var monitor = NetworkMonitor()
     @State private var pingTick = Date()
     @State private var lastReplyAt: Date? = PingLog.lastIncomingReplyAt
+    @State private var searchTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
 
@@ -92,12 +93,14 @@ struct OnboardingView: View {
                 if let coordinate = savedCoordinate {
                     Annotation("You", coordinate: coordinate) {
                         TweenPin(role: .selfDot)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
 
                 if let displayPeerCoordinate {
                     Annotation("Friend", coordinate: displayPeerCoordinate) {
                         TweenPin(role: .friend)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
 
@@ -110,6 +113,7 @@ struct OnboardingView: View {
                    let bestCoordinate = bestSpot.item.placemark.location?.coordinate {
                     Annotation("Fair spot", coordinate: bestCoordinate) {
                         TweenPin(role: .midpoint)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
 
@@ -123,6 +127,7 @@ struct OnboardingView: View {
                                 placeAnnotation(item: item)
                             }
                             .buttonStyle(.plain)
+                            .transition(.scale.combined(with: .opacity))
                         }
                     }
                 }
@@ -130,6 +135,10 @@ struct OnboardingView: View {
             .onMapCameraChange(frequency: .continuous) { context in
                 lastVisibleRegion = context.region
             }
+            .animation(Tokens.Motion.spring, value: searchResults.count)
+            .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
+            .animation(Tokens.Motion.spring, value: displayPeerCoordinate?.latitude)
+            .animation(Tokens.Motion.spring, value: rankedSpots.first?.item.hash)
     }
 
     @ViewBuilder
@@ -241,6 +250,27 @@ struct OnboardingView: View {
         .tweenGlass(cornerRadius: Tokens.Radius.chip)
         .padding(.horizontal, Tokens.Space.s4)
         .padding(.top, Tokens.Space.s3)
+        .onChange(of: searchText) { _, newValue in
+            scheduleDebouncedSearch(for: newValue)
+        }
+    }
+
+    /// Cancels any in-flight debounced search and schedules a new one 400ms after the
+    /// latest keystroke. Empty input shortcut-clears the result state.
+    private func scheduleDebouncedSearch(for input: String) {
+        searchTask?.cancel()
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            searchResults = []
+            rankedSpots = []
+            searchError = nil
+            return
+        }
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { searchPlaces() }
+        }
     }
 
     private var mapControls: some View {
@@ -373,38 +403,45 @@ struct OnboardingView: View {
                         statusView
                     }
 
-                    switch panelTab {
-                    case .map:
-                        if let detailItem {
-                            SpotDetail(
-                                item: detailItem,
-                                ranked: rankedSpot(for: detailItem),
-                                symbol: placeIcon(for: detailItem),
-                                categoryTint: placeColor(for: detailItem),
-                                typeLabel: placeTypeLabel(for: detailItem),
-                                youDistance: distanceFrom(savedCoordinate, to: detailItem),
-                                friendDistance: distanceFrom(peerCoordinate, to: detailItem),
-                                namespace: spotTransition,
-                                onShowOnMap: { showOnMap(detailItem) },
-                                onSendToChat: { sendToChat(detailItem) },
-                                onOpenInMaps: { openInMaps(detailItem) },
-                                onClose: closeDetail
-                            )
-                        } else if !searchResults.isEmpty {
-                            placeResultsList
-                        } else if searchError != nil {
-                            searchErrorCard
-                        } else if savedCoordinate == nil && peerCoordinate == nil {
-                            VStack(spacing: Tokens.Space.s3) {
-                                freshLaunchHero
+                    Group {
+                        switch panelTab {
+                        case .map:
+                            if let detailItem {
+                                SpotDetail(
+                                    item: detailItem,
+                                    ranked: rankedSpot(for: detailItem),
+                                    symbol: placeIcon(for: detailItem),
+                                    categoryTint: placeColor(for: detailItem),
+                                    typeLabel: placeTypeLabel(for: detailItem),
+                                    youDistance: distanceFrom(savedCoordinate, to: detailItem),
+                                    friendDistance: distanceFrom(peerCoordinate, to: detailItem),
+                                    namespace: spotTransition,
+                                    onShowOnMap: { showOnMap(detailItem) },
+                                    onSendToChat: { sendToChat(detailItem) },
+                                    onOpenInMaps: { openInMaps(detailItem) },
+                                    onClose: closeDetail
+                                )
+                            } else if !searchResults.isEmpty {
+                                placeResultsList
+                            } else if searchError != nil {
+                                searchErrorCard
+                            } else if savedCoordinate == nil && peerCoordinate == nil {
+                                VStack(spacing: Tokens.Space.s3) {
+                                    freshLaunchHero
+                                    categoryChipRow
+                                }
+                            } else {
                                 categoryChipRow
                             }
-                        } else {
-                            categoryChipRow
+                        case .waiting:
+                            waitingTab
                         }
-                    case .waiting:
-                        waitingTab
                     }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .animation(Tokens.Motion.spring, value: detailItem)
+                    .animation(Tokens.Motion.spring, value: searchResults.count)
+                    .animation(Tokens.Motion.spring, value: searchError)
+                    .animation(Tokens.Motion.spring, value: panelTab)
 
                     if panelDetent != .full, panelTab == .map {
                         actionControls
@@ -443,20 +480,16 @@ struct OnboardingView: View {
             } message: {
                 Text("Use a name you'll recognize.")
             }
-            .alert(
-                "Share your current location?",
-                isPresented: Binding(
-                    get: { pendingShare != nil },
-                    set: { if !$0 { pendingShare = nil } }
+            .sheet(item: $pendingShare) { _ in
+                LocationShareSheet(
+                    onShare: {
+                        pendingShare = nil
+                        updateMyDot()
+                    },
+                    onCancel: { pendingShare = nil }
                 )
-            ) {
-                Button("Share") {
-                    pendingShare = nil
-                    updateMyDot()
-                }
-                Button("Cancel", role: .cancel) { pendingShare = nil }
-            } message: {
-                Text("Tween will capture your location once and use it to find a fair meetup spot.")
+                .presentationDetents([.height(440)])
+                .presentationDragIndicator(.visible)
             }
             .sensoryFeedback(.selection, trigger: detailItem)
             .sensoryFeedback(.impact(weight: .light), trigger: selectedPlace)
@@ -628,6 +661,8 @@ struct OnboardingView: View {
                 Button(action: leaveTween) {
                     Text("No longer in")
                         .lineLimit(1)
+                        // 52pt fixed-height button can't reflow vertically.
+                        // Allow accessibility-large sizes to tighten rather than overflow.
                         .minimumScaleFactor(0.78)
                 }
                 .buttonStyle(.tweenSubtle)
@@ -646,6 +681,8 @@ struct OnboardingView: View {
                     .font(Tokens.Typography.headline)
                     .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .lineLimit(1)
+                    // 52pt status pill, single-line by design.
+                    // Tighten rather than clip when Dynamic Type runs large.
                     .minimumScaleFactor(0.82)
             }
             .frame(maxWidth: .infinity)
@@ -1545,7 +1582,6 @@ struct OnboardingView: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
                     .padding(.horizontal, 7)
                     .frame(height: 24)
                     .background(.regularMaterial, in: Capsule())
@@ -1782,6 +1818,52 @@ private struct TutorialCard: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Branded pre-permission location-share confirmation. Replaces the Phase 1 system alert
+/// with a tokenized half-sheet that explains *why* the location is needed and *where* it
+/// stays — meant to read as trustworthy before iOS's own permission prompt fires.
+private struct LocationShareSheet: View {
+    let onShare: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: Tokens.Space.s4) {
+            ZStack {
+                Circle().fill(Tokens.Palette.brandMuted)
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(Tokens.Palette.brand)
+            }
+            .frame(width: 64, height: 64)
+
+            VStack(spacing: Tokens.Space.s2) {
+                Text("Share your location")
+                    .font(Tokens.Typography.title)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                Text("Tween needs your location once to find a fair meetup spot. We don't store it on a server — it stays on your device.")
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+            }
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: Tokens.Space.s2) {
+                Button(action: onShare) {
+                    Text("Share my location")
+                }
+                .buttonStyle(.tweenPrimary)
+
+                Button(action: onCancel) {
+                    Text("Not now")
+                }
+                .buttonStyle(.tweenSubtle)
+            }
+        }
+        .padding(Tokens.Space.s5)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
