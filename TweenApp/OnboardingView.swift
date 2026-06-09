@@ -532,10 +532,17 @@ struct OnboardingView: View {
     private func refreshSavedLocation(forceFocus: Bool = false) {
         let latestSaved = LocationCache.load()
         let latestPeer = LocationCache.loadPeer()
-        let changed = !sameCoordinate(savedCoordinate, latestSaved) || !sameCoordinate(peerCoordinate, latestPeer)
-        savedCoordinate = latestSaved
-        peerCoordinate = latestPeer
-        guard (forceFocus || changed), savedCoordinate != nil || peerCoordinate != nil else { return }
+        let peerJustAppeared = peerCoordinate == nil && latestPeer != nil
+        // Only mutate @State when the value actually changed. Optional<CLLocationCoordinate2D>
+        // isn't Equatable, so SwiftUI can't dedupe identical writes — without these guards the
+        // 1 s poll would re-render the Map every tick even when nothing moved.
+        if !sameCoordinate(savedCoordinate, latestSaved) { savedCoordinate = latestSaved }
+        if !sameCoordinate(peerCoordinate, latestPeer) { peerCoordinate = latestPeer }
+        // The camera reframes only on explicit intent — first load (forceFocus) or the one-shot
+        // moment a peer coordinate first appears. Routine poll-driven data refreshes must never
+        // reassign `position` or the user's pan/zoom gets stomped.
+        guard forceFocus || peerJustAppeared else { return }
+        guard savedCoordinate != nil || peerCoordinate != nil else { return }
         focusOnPeople()
     }
 
