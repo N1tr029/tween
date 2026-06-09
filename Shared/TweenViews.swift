@@ -43,7 +43,7 @@ struct CompactView: View {
                             Circle()
                                 .fill(Tokens.Palette.brand)
                             Image(systemName: "star.fill")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(Tokens.Typography.iconBadge)
                                 .foregroundStyle(.white)
                         }
                         .frame(width: 22, height: 22)
@@ -61,12 +61,15 @@ struct CompactView: View {
                         Spacer(minLength: 0)
 
                         Image(systemName: "chevron.up.right")
-                            .font(.system(size: 12, weight: .bold))
+                            .font(Tokens.Typography.iconBadge)
                             .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Open Tween. \(summaryText).")
+                .accessibilityHint("Expands the Tween app to pick a meetup spot.")
 
                 Button(action: onImIn) {
                     Text("I'm in")
@@ -195,7 +198,7 @@ struct ExpandedView: View {
                 ZStack {
                     Circle().fill(Tokens.Palette.brand)
                     Image(systemName: "paperplane.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(Tokens.Typography.iconBadge)
                         .foregroundStyle(.white)
                 }
                 .frame(width: 28, height: 28)
@@ -251,7 +254,7 @@ struct ExpandedView: View {
                     .fill(isTop ? Tokens.Palette.brand : Tokens.Palette.onSurfaceMuted)
                 if isTop {
                     Image(systemName: "star.fill")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(Tokens.Typography.iconBadge)
                         .foregroundStyle(.white)
                 } else {
                     Text("\(rank)")
@@ -413,10 +416,10 @@ private struct TweenMapSnapshotView: View {
                 }
             }
             if let received {
-                drawDot(at: snapshot.point(for: received), color: Tokens.Palette.UIKit.pinFriend)
+                drawDot(at: snapshot.point(for: received), color: Tokens.Palette.UIKit.pinFriend, isFriend: true)
             }
             if let cachedCoordinate {
-                drawDot(at: snapshot.point(for: cachedCoordinate), color: Tokens.Palette.UIKit.pinSelf)
+                drawDot(at: snapshot.point(for: cachedCoordinate), color: Tokens.Palette.UIKit.pinSelf, isFriend: false)
             }
         }
     }
@@ -460,11 +463,17 @@ private struct TweenMapSnapshotView: View {
         path.stroke()
     }
 
-    private func drawDot(at point: CGPoint, color: UIColor) {
+    /// Shape-distinguished endpoint pin: `isFriend == true` draws a rounded-rect halo so
+    /// the friend pin reads differently from the self pin even in monochrome.
+    private func drawDot(at point: CGPoint, color: UIColor, isFriend: Bool) {
         let halo = CGRect(x: point.x - 19, y: point.y - 19, width: 38, height: 38)
         let dot = CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16)
         color.withAlphaComponent(0.18).setFill()
-        UIBezierPath(ovalIn: halo).fill()
+        if isFriend {
+            UIBezierPath(roundedRect: halo, cornerRadius: 11).fill()
+        } else {
+            UIBezierPath(ovalIn: halo).fill()
+        }
         UIColor.white.setFill()
         UIBezierPath(ovalIn: dot.insetBy(dx: -4, dy: -4)).fill()
         color.setFill()

@@ -14,7 +14,7 @@ struct TweenPin: View {
 
     var body: some View {
         ZStack {
-            Circle()
+            halo
                 .fill(tint.opacity(0.18))
                 .frame(width: outerSize, height: outerSize)
             Circle()
@@ -31,6 +31,18 @@ struct TweenPin: View {
                 }
         }
         .tweenElevation(role == .midpoint ? Tokens.Elevation.floating : Tokens.Elevation.pin)
+    }
+
+    /// Shape of the outer halo. `selfDot` is a circle; `friend` is a rounded square so the
+    /// two endpoints are distinguishable in monochrome / color-blind palettes.
+    /// `midpoint` keeps the circle — it's already differentiated by size, star, and pulse.
+    private var halo: AnyShape {
+        switch role {
+        case .selfDot, .midpoint:
+            return AnyShape(Circle())
+        case .friend:
+            return AnyShape(RoundedRectangle(cornerRadius: outerSize * 0.30, style: .continuous))
+        }
     }
 
     private var tint: Color {

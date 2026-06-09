@@ -9,7 +9,24 @@ import UIKit
 /// Safe-area inset (`keepOut` below): the chat bubble's rounded-corner mask iOS applies on
 /// receiver side eats ~20 pt at each corner. We keep all branding + pins outside that.
 enum BubbleImageRenderer {
+    /// Keep-out inset for the rounded-corner mask Messages applies on the receiver side.
     static let keepOut: CGFloat = 28
+    /// Bottom branded strip dimensions and inner element sizes — these are pixel values
+    /// in the 600×400 @3x canvas, not points on the device grid.
+    private static let stripHeight: CGFloat = 56
+    private static let stripCornerRadius: CGFloat = 14
+    private static let stripInsetTop: CGFloat = 10
+    private static let starBadgeSize: CGFloat = 28
+    private static let starInset: CGFloat = 7
+    private static let wordmarkOffset: CGFloat = 8
+    private static let wordmarkFontSize: CGFloat = 17
+    private static let trailingFontSize: CGFloat = 14
+    /// Self / friend / midpoint pin sizes — same ratios as the SwiftUI TweenPin, scaled up
+    /// for the bubble canvas.
+    private static let pinHaloSize: CGFloat = 56
+    private static let midpointDotSize: CGFloat = 36
+    private static let midpointStarSize: CGFloat = 22
+    private static let endpointDotSize: CGFloat = 26
 
     static func makeImage(
         selfCoord: CLLocationCoordinate2D?,
@@ -62,9 +79,9 @@ enum BubbleImageRenderer {
                 drawMidpointStar(at: snapshot.point(for: coordinate))
             }
             if let selfCoord {
-                drawDot(at: snapshot.point(for: selfCoord), color: Tokens.Palette.UIKit.pinSelf)
+                drawDot(at: snapshot.point(for: selfCoord), color: Tokens.Palette.UIKit.pinSelf, isFriend: false)
             }
-            drawDot(at: snapshot.point(for: peer), color: Tokens.Palette.UIKit.pinFriend)
+            drawDot(at: snapshot.point(for: peer), color: Tokens.Palette.UIKit.pinFriend, isFriend: true)
 
             // Bottom branded strip — sits above the rounded-corner keepOut.
             drawBrandedStrip(
@@ -76,7 +93,6 @@ enum BubbleImageRenderer {
     }
 
     private static func drawBrandedStrip(in cgContext: CGContext, size: CGSize, spotName: String?) {
-        let stripHeight: CGFloat = 56
         let stripRect = CGRect(
             x: keepOut,
             y: size.height - keepOut - stripHeight,
@@ -84,39 +100,39 @@ enum BubbleImageRenderer {
             height: stripHeight
         )
 
-        let bg = UIBezierPath(roundedRect: stripRect, cornerRadius: 14)
+        let bg = UIBezierPath(roundedRect: stripRect, cornerRadius: stripCornerRadius)
         UIColor.black.withAlphaComponent(0.55).setFill()
         bg.fill()
 
         // Star + wordmark on the left
         let starBg = CGRect(
-            x: stripRect.minX + 10,
-            y: stripRect.midY - 14,
-            width: 28,
-            height: 28
+            x: stripRect.minX + stripInsetTop,
+            y: stripRect.midY - starBadgeSize / 2,
+            width: starBadgeSize,
+            height: starBadgeSize
         )
         Tokens.Palette.UIKit.brand.setFill()
         UIBezierPath(ovalIn: starBg).fill()
         if let star = UIImage(systemName: "star.fill")?
             .withTintColor(.white, renderingMode: .alwaysOriginal) {
-            star.draw(in: starBg.insetBy(dx: 7, dy: 7))
+            star.draw(in: starBg.insetBy(dx: starInset, dy: starInset))
         }
 
         let wordmark = NSAttributedString(
             string: "Tween",
             attributes: [
-                .font: UIFont.systemFont(ofSize: 17, weight: .bold),
+                .font: UIFont.systemFont(ofSize: wordmarkFontSize, weight: .bold),
                 .foregroundColor: UIColor.white,
             ]
         )
-        wordmark.draw(at: CGPoint(x: starBg.maxX + 8, y: stripRect.midY - 10))
+        wordmark.draw(at: CGPoint(x: starBg.maxX + wordmarkOffset, y: stripRect.midY - wordmarkFontSize / 1.7))
 
         // Right side: spot name (truncated to fit)
         let trailing = spotName ?? "Meet in the middle"
         let trailingAttr = NSAttributedString(
             string: trailing,
             attributes: [
-                .font: UIFont.systemFont(ofSize: 14, weight: .semibold),
+                .font: UIFont.systemFont(ofSize: trailingFontSize, weight: .semibold),
                 .foregroundColor: UIColor.white.withAlphaComponent(0.9),
             ]
         )
@@ -126,7 +142,7 @@ enum BubbleImageRenderer {
             context: nil
         )
         trailingAttr.draw(at: CGPoint(
-            x: stripRect.maxX - bounding.width - 14,
+            x: stripRect.maxX - bounding.width - stripInsetTop - 4,
             y: stripRect.midY - bounding.height / 2
         ))
     }
@@ -150,11 +166,17 @@ enum BubbleImageRenderer {
         star?.draw(in: starRect)
     }
 
-    private static func drawDot(at point: CGPoint, color: UIColor) {
-        let halo = CGRect(x: point.x - 28, y: point.y - 28, width: 56, height: 56)
-        let dot = CGRect(x: point.x - 13, y: point.y - 13, width: 26, height: 26)
+    /// Shape-distinguished endpoint pin — `isFriend == true` draws a rounded-rect halo so
+    /// the bubble image remains legible in color-blind palettes.
+    private static func drawDot(at point: CGPoint, color: UIColor, isFriend: Bool) {
+        let halo = CGRect(x: point.x - pinHaloSize / 2, y: point.y - pinHaloSize / 2, width: pinHaloSize, height: pinHaloSize)
+        let dot = CGRect(x: point.x - endpointDotSize / 2, y: point.y - endpointDotSize / 2, width: endpointDotSize, height: endpointDotSize)
         color.withAlphaComponent(0.18).setFill()
-        UIBezierPath(ovalIn: halo).fill()
+        if isFriend {
+            UIBezierPath(roundedRect: halo, cornerRadius: pinHaloSize * 0.30).fill()
+        } else {
+            UIBezierPath(ovalIn: halo).fill()
+        }
         UIColor.white.setFill()
         UIBezierPath(ovalIn: dot.insetBy(dx: -5, dy: -5)).fill()
         color.setFill()

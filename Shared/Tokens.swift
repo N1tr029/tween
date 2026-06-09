@@ -78,6 +78,8 @@ enum Tokens {
         static let caption = Font.caption
         static let captionEmphasized = Font.caption.weight(.semibold)
         static let mono = Font.system(.caption, design: .monospaced)
+        /// Small SF Symbol inside a ≤24pt circle — used for badge stars, plus-buttons, etc.
+        static let iconBadge = Font.system(size: 10, weight: .bold)
     }
 
     enum Duration {

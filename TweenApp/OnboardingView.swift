@@ -220,6 +220,7 @@ struct OnboardingView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 }
+                .accessibilityLabel("Clear search")
                 .buttonStyle(.plain)
             }
         }
@@ -231,7 +232,7 @@ struct OnboardingView: View {
     }
 
     private var mapControls: some View {
-        VStack(spacing: Tokens.Space.s2) {
+        VStack(spacing: Tokens.Space.s2 + 2) {
             Menu {
                 ForEach(MapDisplayMode.allCases) { mode in
                     Button {
@@ -241,23 +242,25 @@ struct OnboardingView: View {
                     }
                 }
             } label: {
-                Image(systemName: mapDisplayMode.systemImage)
-                    .font(Tokens.Typography.headline)
-                    .symbolEffect(.bounce, value: mapDisplayMode)
-                    .frame(width: 42, height: 42)
+                mapControlLabel(
+                    icon: mapDisplayMode.systemImage,
+                    text: mapDisplayMode == .satellite ? "Sat" : "Map",
+                    isActive: false,
+                    iconValue: mapDisplayMode
+                )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Map style")
+            .accessibilityLabel("Map style. Current: \(mapDisplayMode.title)")
 
             Button {
                 setTrafficVisible(!showsTraffic)
             } label: {
-                Image(systemName: showsTraffic ? "car.fill" : "car")
-                    .font(Tokens.Typography.headline)
-                    .foregroundStyle(showsTraffic ? .white : Tokens.Palette.onSurface)
-                    .symbolEffect(.bounce, value: showsTraffic)
-                    .frame(width: 42, height: 42)
-                    .background(showsTraffic ? Tokens.Palette.brand : Color.clear, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+                mapControlLabel(
+                    icon: showsTraffic ? "car.fill" : "car",
+                    text: "Traffic",
+                    isActive: showsTraffic,
+                    iconValue: showsTraffic
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel(showsTraffic ? "Hide traffic" : "Show traffic")
@@ -266,10 +269,12 @@ struct OnboardingView: View {
                 .frame(width: 28)
 
             Button(action: resetMap) {
-                Image(systemName: "location.north.line.fill")
-                    .font(Tokens.Typography.headline)
-                    .symbolEffect(.bounce, value: searchResults.count)
-                    .frame(width: 42, height: 42)
+                mapControlLabel(
+                    icon: "location.north.line.fill",
+                    text: "Reset",
+                    isActive: false,
+                    iconValue: searchResults.count
+                )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reset map")
@@ -279,6 +284,25 @@ struct OnboardingView: View {
         .tweenElevation(Tokens.Elevation.floating)
         .animation(Tokens.Motion.snappy, value: mapDisplayMode)
         .animation(Tokens.Motion.snappy, value: showsTraffic)
+    }
+
+    private func mapControlLabel(
+        icon: String,
+        text: String,
+        isActive: Bool,
+        iconValue: some Hashable
+    ) -> some View {
+        VStack(spacing: 2) {
+            Image(systemName: icon)
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(isActive ? .white : Tokens.Palette.onSurface)
+                .symbolEffect(.bounce, value: iconValue)
+            Text(text)
+                .font(Tokens.Typography.caption.weight(.semibold))
+                .foregroundStyle(isActive ? .white : Tokens.Palette.onSurfaceMuted)
+        }
+        .frame(width: 46, height: 46)
+        .background(isActive ? Tokens.Palette.brand : Color.clear, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
     }
 
     private var bottomPanel: some View {
@@ -426,7 +450,7 @@ struct OnboardingView: View {
                 ZStack {
                     Circle().fill(Tokens.Palette.brand)
                     Image(systemName: "star.fill")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(Tokens.Typography.iconBadge)
                         .foregroundStyle(.white)
                 }
                 .frame(width: 22, height: 22)
@@ -450,7 +474,7 @@ struct OnboardingView: View {
                     .foregroundStyle(Tokens.Palette.onSurface)
                 Spacer()
                 Image(systemName: "chevron.up")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(Tokens.Typography.iconBadge)
                     .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             }
             .padding(.horizontal, Tokens.Space.s3)
@@ -797,17 +821,18 @@ struct OnboardingView: View {
     }
 
     private var friendList: some View {
-        VStack(spacing: Tokens.Space.s2) {
+        VStack(spacing: Tokens.Space.s3) {
             ForEach(friends) { friend in
-                HStack(spacing: Tokens.Space.s2 + 2) {
+                HStack(spacing: Tokens.Space.s3) {
                     Text(initials(for: friend))
                         .font(Tokens.Typography.captionEmphasized)
                         .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 36, height: 36)
                         .background(color(for: friend), in: Circle())
 
                     Text(friend.name)
-                        .font(Tokens.Typography.callout.weight(.semibold))
+                        .font(Tokens.Typography.headline)
+                        .foregroundStyle(Tokens.Palette.onSurface)
 
                     Spacer()
 
@@ -823,8 +848,16 @@ struct OnboardingView: View {
                     }
                     .accessibilityLabel("Manage \(friend.name)")
                 }
-                .padding(Tokens.Space.s2 + 2)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2))
+                .padding(Tokens.Space.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                        .fill(Tokens.Palette.surface)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                        .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+                }
             }
         }
     }
@@ -1359,8 +1392,10 @@ struct OnboardingView: View {
                     .overlay {
                         Capsule().stroke(Color.secondary.opacity(0.16), lineWidth: 1)
                     }
+                    .accessibilityLabel(placeDistanceAccessibilityLabel(for: item))
             }
             placeDot(item: item)
+                .accessibilityHidden(true)
         }
     }
 
@@ -1369,6 +1404,14 @@ struct OnboardingView: View {
         let you = distanceFrom(savedCoordinate, to: item) ?? "--"
         let friend = distanceFrom(peerCoordinate, to: item) ?? "--"
         return "A \(you) · B \(friend)"
+    }
+
+    /// Human-readable accessibility label for the distance bubble — VoiceOver should never
+    /// have to decode "A 0.4mi · B 0.6mi".
+    private func placeDistanceAccessibilityLabel(for item: MKMapItem) -> String {
+        let you = distanceFrom(savedCoordinate, to: item) ?? "unknown"
+        let friend = distanceFrom(peerCoordinate, to: item) ?? "unknown"
+        return "You are \(you) from this place, friend is \(friend)."
     }
 
     private func placeIcon(for item: MKMapItem) -> String {
