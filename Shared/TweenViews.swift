@@ -32,6 +32,31 @@ struct CompactView: View {
         state == .placeholder ? "meet in the middle" : state.text
     }
 
+    /// Short relative-time string if the most recent peer reply landed within the past hour.
+    /// Surfaces Phase 8's PingLog into the keyboard-height compact strip so users see at a
+    /// glance that the thread has activity.
+    private var recentReplyLabel: String? {
+        guard let date = PingLog.lastIncomingReplyAt else { return nil }
+        guard Date().timeIntervalSince(date) < 3600 else { return nil }
+        return RelativeTime.formatShort(since: date)
+    }
+
+    private func replyHintPill(_ relative: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "paperplane.fill")
+                .font(Tokens.Typography.iconBadge)
+                .foregroundStyle(Tokens.Palette.brand)
+            Text(relative)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(Tokens.Palette.brand)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, Tokens.Space.s2 - 2)
+        .padding(.vertical, 2)
+        .background(Tokens.Palette.brandMuted, in: Capsule())
+        .accessibilityHidden(true)
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             TweenMapSnapshotView(received: receivedCoordinate, cachedCoordinate: nil)
@@ -58,6 +83,10 @@ struct CompactView: View {
                                 .lineLimit(1)
                         }
 
+                        if let reply = recentReplyLabel {
+                            replyHintPill(reply)
+                        }
+
                         Spacer(minLength: 0)
 
                         Image(systemName: "chevron.up.right")
@@ -68,7 +97,7 @@ struct CompactView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Open Tween. \(summaryText).")
+                .accessibilityLabel("Open Tween. \(summaryText).\(recentReplyLabel.map { " Reply \($0)." } ?? "")")
                 .accessibilityHint("Expands the Tween app to pick a meetup spot.")
 
                 Button(action: onImIn) {
@@ -84,6 +113,7 @@ struct CompactView: View {
                         .background(Tokens.Palette.brand, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Send I'm in to chat")
             }
             .padding(.horizontal, Tokens.Space.s3)
             .padding(.vertical, Tokens.Space.s2)
@@ -110,11 +140,25 @@ struct ExpandedView: View {
     let isRequesting: Bool
     var rankedSpots: [RankedSpot] = []
     var pendingDraft: OutgoingDraft? = nil
+    var locationDenied: Bool = false
+    var sentMessageCount: Int = 0
     let onImIn: () -> Void
+    var onSendSpot: (RankedSpot) -> Void = { _ in }
+    var onOpenSettings: () -> Void = {}
     var onSendDraft: () -> Void = {}
     var onCancelDraft: () -> Void = {}
 
+    @State private var networkMonitor = NetworkMonitor()
+    @State private var selectedSpot: RankedSpot?
+
     private var topSpots: [RankedSpot] { Array(rankedSpots.prefix(3)) }
+
+    private var primaryCTALabel: String {
+        if let selectedSpot {
+            return "Send \(selectedSpot.item.name ?? "this spot")"
+        }
+        return cachedCoordinate == nil ? "Share location & add bubble" : "Send I'm in to chat"
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -127,6 +171,11 @@ struct ExpandedView: View {
             .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
+                if !networkMonitor.isOnline {
+                    offlineBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 if let pendingDraft {
                     pendingDraftCard(pendingDraft)
                 }
@@ -151,35 +200,57 @@ struct ExpandedView: View {
                     Image(systemName: cachedCoordinate == nil ? "location.slash" : "location.fill")
                         .font(Tokens.Typography.title)
                         .foregroundStyle(cachedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.pinSelf)
+                        .accessibilityHidden(true)
                 }
 
-                HStack(spacing: Tokens.Space.s2 + 2) {
-                    locationBadge(
-                        title: "Meetup",
-                        coordinate: received?.coordinate,
-                        color: Tokens.Palette.pinFriend,
-                        emptyText: "No meetup yet"
-                    )
-                    locationBadge(
-                        title: "You",
-                        coordinate: cachedCoordinate,
-                        color: Tokens.Palette.pinSelf,
-                        emptyText: "No dot yet"
-                    )
+                if locationDenied {
+                    locationDeniedCard
+                } else if received == nil && cachedCoordinate != nil {
+                    waitingForFriendCard
+                } else {
+                    HStack(spacing: Tokens.Space.s2 + 2) {
+                        locationBadge(
+                            title: "Meetup",
+                            coordinate: received?.coordinate,
+                            color: Tokens.Palette.pinFriend,
+                            emptyText: "No meetup yet"
+                        )
+                        locationBadge(
+                            title: "You",
+                            coordinate: cachedCoordinate,
+                            color: Tokens.Palette.pinSelf,
+                            emptyText: "No dot yet"
+                        )
+                    }
                 }
 
                 if !topSpots.isEmpty {
                     fairSpotsRow
                 }
 
-                Button(action: onImIn) {
+                Button {
+                    if let selectedSpot {
+                        onSendSpot(selectedSpot)
+                    } else {
+                        onImIn()
+                    }
+                } label: {
                     HStack(spacing: Tokens.Space.s2) {
-                        if isRequesting { ProgressView().tint(.white) }
-                        Text(cachedCoordinate == nil ? "Share location & add bubble" : "Send I'm in to chat")
+                        if isRequesting {
+                            ProgressView()
+                                .tint(.white)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                        Text(primaryCTALabel)
+                            .contentTransition(.numericText())
                     }
                 }
                 .buttonStyle(.tweenPrimary)
                 .disabled(isRequesting)
+                .animation(Tokens.Motion.spring, value: isRequesting)
+                .animation(Tokens.Motion.spring, value: selectedSpot?.item.hash)
+                .animation(Tokens.Motion.spring, value: cachedCoordinate?.latitude)
+                .accessibilityLabel(primaryCTALabel)
 
                 Text("After the bubble appears in Messages, tap the blue send arrow.")
                     .font(Tokens.Typography.caption)
@@ -190,8 +261,82 @@ struct ExpandedView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .tweenGlass(cornerRadius: Tokens.Radius.sheet)
             .padding(Tokens.Space.s3)
+            .animation(Tokens.Motion.spring, value: networkMonitor.isOnline)
+            .sensoryFeedback(.selection, trigger: selectedSpot?.item.hash)
+            .sensoryFeedback(.success, trigger: sentMessageCount)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var offlineBanner: some View {
+        HStack(spacing: Tokens.Space.s2) {
+            Image(systemName: "wifi.slash")
+                .foregroundStyle(Tokens.Palette.warning)
+            Text("Offline — can't search for places")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.onSurface)
+            Spacer()
+        }
+        .padding(.horizontal, Tokens.Space.s3)
+        .padding(.vertical, Tokens.Space.s2)
+        .background(Tokens.Palette.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+                .stroke(Tokens.Palette.warning.opacity(0.30), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var locationDeniedCard: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s2 + 2) {
+            HStack(spacing: Tokens.Space.s2) {
+                Image(systemName: "location.slash.fill")
+                    .font(Tokens.Typography.callout.weight(.bold))
+                    .foregroundStyle(Tokens.Palette.warning)
+                Text("Location turned off")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+            }
+            Text("Tween needs your location to find a fair meetup spot. Re-enable it in Settings.")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            Button(action: onOpenSettings) {
+                Text("Open Settings")
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+        .padding(Tokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.Palette.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                .stroke(Tokens.Palette.warning.opacity(0.35), lineWidth: 1)
+        }
+    }
+
+    private var waitingForFriendCard: some View {
+        HStack(spacing: Tokens.Space.s2 + 2) {
+            ZStack {
+                Circle().fill(Tokens.Palette.brandMuted)
+                Image(systemName: "person.2.fill")
+                    .font(Tokens.Typography.callout.weight(.bold))
+                    .foregroundStyle(Tokens.Palette.brand)
+            }
+            .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Waiting for your friend's location")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                Text("Your dot is set — they'll see it when they say I'm in.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .lineLimit(2)
+            }
+        }
+        .padding(Tokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.Palette.brandMuted, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .accessibilityElement(children: .combine)
     }
 
     private func pendingDraftCard(_ draft: OutgoingDraft) -> some View {
@@ -220,11 +365,13 @@ struct ExpandedView: View {
                     Text("Send")
                 }
                 .buttonStyle(.tweenPrimary)
+                .accessibilityLabel("Send chosen spot, meet at \(draft.name)")
 
                 Button(action: onCancelDraft) {
                     Text("Cancel")
                 }
                 .buttonStyle(.tweenSubtle)
+                .accessibilityLabel("Cancel draft spot")
             }
         }
         .padding(Tokens.Space.s3)
@@ -250,34 +397,58 @@ struct ExpandedView: View {
         let aMin = Int((spot.etaFromA / 60).rounded())
         let bMin = Int((spot.etaFromB / 60).rounded())
         let isTop = rank == 1
-        return HStack(spacing: Tokens.Space.s2) {
-            ZStack {
-                Circle()
-                    .fill(isTop ? Tokens.Palette.brand : Tokens.Palette.onSurfaceMuted)
-                if isTop {
-                    Image(systemName: "star.fill")
-                        .font(Tokens.Typography.iconBadge)
-                        .foregroundStyle(.white)
-                } else {
-                    Text("\(rank)")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white)
+        let isSelected = selectedSpot?.item.hash == spot.item.hash
+        return Button {
+            if isSelected {
+                selectedSpot = nil
+            } else {
+                selectedSpot = spot
+            }
+        } label: {
+            HStack(spacing: Tokens.Space.s2) {
+                ZStack {
+                    Circle()
+                        .fill(isTop ? Tokens.Palette.brand : Tokens.Palette.onSurfaceMuted)
+                    if isTop {
+                        Image(systemName: "star.fill")
+                            .font(Tokens.Typography.iconBadge)
+                            .foregroundStyle(.white)
+                    } else {
+                        Text("\(rank)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(spot.item.name ?? "Place")
+                        .font(Tokens.Typography.captionEmphasized)
+                        .lineLimit(1)
+                    Text("You \(aMin)m · Friend \(bMin)m")
+                        .font(.caption2)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .lineLimit(1)
                 }
             }
-            .frame(width: 18, height: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(spot.item.name ?? "Place")
-                    .font(Tokens.Typography.captionEmphasized)
-                    .lineLimit(1)
-                Text("You \(aMin)m · Friend \(bMin)m")
-                    .font(.caption2)
-                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-                    .lineLimit(1)
+            .padding(.horizontal, Tokens.Space.s2 + 2)
+            .padding(.vertical, Tokens.Space.s1 + 2)
+            .background(
+                isSelected || isTop ? Tokens.Palette.brandMuted : Tokens.Palette.surface,
+                in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2)
+                    .stroke(isSelected ? Tokens.Palette.brand : Color.clear, lineWidth: 1.5)
             }
         }
-        .padding(.horizontal, Tokens.Space.s2 + 2)
-        .padding(.vertical, Tokens.Space.s1 + 2)
-        .background(isTop ? Tokens.Palette.brandMuted : Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2))
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(isTop ? "Top-ranked spot" : "Rank \(rank)"): \(spot.item.name ?? "Place"). " +
+            "You \(aMin) minutes, friend \(bMin) minutes."
+        )
+        .accessibilityHint(isSelected ? "Tap to deselect." : "Tap to choose this spot.")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     private func locationBadge(

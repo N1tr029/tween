@@ -13,8 +13,12 @@ private struct RootView: View {
     let isExpanded: Bool
     let rankedSpots: [RankedSpot]
     let pendingDraft: OutgoingDraft?
+    let locationDenied: Bool
+    let sentMessageCount: Int
     let onExpand: () -> Void
     let onImIn: () -> Void
+    let onSendSpot: (RankedSpot) -> Void
+    let onOpenSettings: () -> Void
     let onSendDraft: () -> Void
     let onCancelDraft: () -> Void
 
@@ -26,57 +30,19 @@ private struct RootView: View {
                 isRequesting: isRequesting,
                 rankedSpots: rankedSpots,
                 pendingDraft: pendingDraft,
+                locationDenied: locationDenied,
+                sentMessageCount: sentMessageCount,
                 onImIn: onImIn,
+                onSendSpot: onSendSpot,
+                onOpenSettings: onOpenSettings,
                 onSendDraft: onSendDraft,
                 onCancelDraft: onCancelDraft
             )
-            #if DEBUG
-            .overlay(alignment: .top) { DebugCacheOverlay() }
-            #endif
         } else {
             CompactView(state: received ?? .placeholder, onTap: onExpand, onImIn: onImIn)
         }
     }
 }
-
-#if DEBUG
-// Slice 1 verification harness: writes a peer-sentinel into the App Group and
-// displays whatever the app wrote to self. 1 Hz refresh via TimelineView so a
-// fresh value from the other process becomes visible without re-expanding.
-// Delete with `git grep '#if DEBUG'`.
-private struct DebugCacheOverlay: View {
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1.0)) { _ in
-            let selfCoord = LocationCache.load()
-            let peerCoord = LocationCache.loadPeer()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("DEBUG · App Group")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-                Text("self: \(formatDebug(selfCoord))")
-                    .font(.caption.monospaced())
-                Text("peer: \(formatDebug(peerCoord))")
-                    .font(.caption.monospaced())
-                Button("Write peer sentinel (21.654321, 87.654321)") {
-                    LocationCache.savePeer(CLLocationCoordinate2D(latitude: 21.654321, longitude: 87.654321))
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-        }
-    }
-
-    private func formatDebug(_ coordinate: CLLocationCoordinate2D?) -> String {
-        guard let coordinate else { return "nil" }
-        return String(format: "%.6f, %.6f", coordinate.latitude, coordinate.longitude)
-    }
-}
-#endif
 
 final class MessagesViewController: MSMessagesAppViewController {
 
@@ -87,6 +53,7 @@ final class MessagesViewController: MSMessagesAppViewController {
     private var rankingTask: Task<Void, Never>?
     private let locationProvider = LocationProvider()
     private var pendingDraft: OutgoingDraft?
+    private var sentMessageCount: Int = 0
 
     // MARK: - Conversation lifecycle
 
@@ -183,6 +150,8 @@ final class MessagesViewController: MSMessagesAppViewController {
     // MARK: - UI
 
     private func presentUI() {
+        let denied: Bool
+        if case .denied = locationProvider.status { denied = true } else { denied = false }
         let root = RootView(
             received: received,
             cachedCoordinate: LocationCache.load(),
@@ -190,8 +159,12 @@ final class MessagesViewController: MSMessagesAppViewController {
             isExpanded: presentationStyle == .expanded,
             rankedSpots: rankedSpots,
             pendingDraft: pendingDraft,
+            locationDenied: denied,
+            sentMessageCount: sentMessageCount,
             onExpand: { [weak self] in self?.requestPresentationStyle(.expanded) },
             onImIn: { [weak self] in self?.handleImIn() },
+            onSendSpot: { [weak self] spot in self?.sendChosenSpot(spot) },
+            onOpenSettings: { [weak self] in self?.openSettings() },
             onSendDraft: { [weak self] in self?.sendPendingDraft() },
             onCancelDraft: { [weak self] in self?.discardPendingDraft() }
         )
@@ -238,6 +211,29 @@ final class MessagesViewController: MSMessagesAppViewController {
 
     private func sendImIn(_ coordinate: CLLocationCoordinate2D) {
         send(TweenState(text: "I'm in", latitude: coordinate.latitude, longitude: coordinate.longitude))
+    }
+
+    /// Sends a user-selected fair spot as the message payload. Reuses the existing send()
+    /// path; BubbleImageRenderer already paints the right pins because we pass the chosen
+    /// spot through `rankedSpots.first` semantics — see the wrapper below.
+    private func sendChosenSpot(_ spot: RankedSpot) {
+        guard let coordinate = spot.item.placemark.location?.coordinate else { return }
+        // Reorder rankedSpots so the user's pick is at index 0; send() reads .first when
+        // building the BubbleImageRenderer chosenSpot argument.
+        if let index = rankedSpots.firstIndex(where: { $0.item.hash == spot.item.hash }) {
+            let pick = rankedSpots.remove(at: index)
+            rankedSpots.insert(pick, at: 0)
+        }
+        send(TweenState(
+            text: "Meet at \(spot.item.name ?? "the spot")",
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude
+        ))
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        extensionContext?.open(url, completionHandler: nil)
     }
 
     private func sendPendingDraft() {
@@ -308,6 +304,7 @@ final class MessagesViewController: MSMessagesAppViewController {
         conversation.insert(message) { error in
             if let error { NSLog("Tween: failed to insert message: \(error.localizedDescription)") }
         }
+        sentMessageCount += 1
         requestPresentationStyle(.compact)
     }
 
