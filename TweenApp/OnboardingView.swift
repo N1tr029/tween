@@ -38,6 +38,7 @@ struct OnboardingView: View {
     @State private var editorName: String = ""
     @State private var pendingShare: ShareIntent?
     @State private var detailItem: MKMapItem?
+    @State private var selectedCategory: CategoryPreset?
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
 
@@ -292,7 +293,7 @@ struct OnboardingView: View {
                     }
 
                 if panelDetent == .peek {
-                    peekIdentity
+                    peekSummary
                 } else {
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: Tokens.Space.s1) {
@@ -334,15 +335,19 @@ struct OnboardingView: View {
                                 friendDistance: distanceFrom(peerCoordinate, to: detailItem),
                                 namespace: spotTransition,
                                 onShowOnMap: { showOnMap(detailItem) },
+                                onSendToChat: { sendToChat(detailItem) },
                                 onOpenInMaps: { openInMaps(detailItem) },
                                 onClose: closeDetail
                             )
                         } else if !searchResults.isEmpty {
                             placeResultsList
-                        } else if let searchError {
-                            Label(searchError, systemImage: "exclamationmark.triangle.fill")
-                                .font(Tokens.Typography.callout)
-                                .foregroundStyle(Tokens.Palette.warning)
+                        } else if searchError != nil {
+                            searchErrorCard
+                        } else if savedCoordinate == nil && peerCoordinate == nil {
+                            VStack(spacing: Tokens.Space.s3) {
+                                freshLaunchHero
+                                categoryChipRow
+                            }
                         } else {
                             categoryChipRow
                         }
@@ -402,6 +407,7 @@ struct OnboardingView: View {
                 Text("Tween will capture your location once and use it to find a fair meetup spot.")
             }
             .sensoryFeedback(.selection, trigger: detailItem)
+            .sensoryFeedback(.impact(weight: .light), trigger: selectedPlace)
         }
     }
 
@@ -413,11 +419,71 @@ struct OnboardingView: View {
             .padding(.bottom, 2)
     }
 
-    private var peekIdentity: some View {
-        Text("Tween")
-            .font(Tokens.Typography.headline)
-            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+    @ViewBuilder
+    private var peekSummary: some View {
+        if let item = selectedPlace, let ranked = rankedSpot(for: item) {
+            HStack(spacing: Tokens.Space.s2) {
+                ZStack {
+                    Circle().fill(Tokens.Palette.brand)
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 22, height: 22)
+                Text(item.name ?? "Picked spot")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .lineLimit(1)
+                Spacer(minLength: Tokens.Space.s2)
+                ETAChip(
+                    selfValue: formatPeekETA(ranked.etaFromA),
+                    friendValue: formatPeekETA(ranked.etaFromB),
+                    isBalanced: ranked.fairnessGap < 0.2 * max(ranked.worseETA, 1)
+                )
+            }
+            .padding(.horizontal, Tokens.Space.s2)
+        } else if savedCoordinate != nil && peerCoordinate != nil {
+            HStack(spacing: Tokens.Space.s2) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(Tokens.Palette.brand)
+                Text("Tap to find a fair spot")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                Spacer()
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
+            .padding(.horizontal, Tokens.Space.s3)
+        } else if savedCoordinate != nil {
+            HStack(spacing: Tokens.Space.s2) {
+                Circle()
+                    .fill(Tokens.Palette.pinSelf)
+                    .frame(width: 8, height: 8)
+                Text("Waiting for a reply")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                Spacer()
+                Text("Tween")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
+            .padding(.horizontal, Tokens.Space.s3)
+        } else {
+            HStack(spacing: Tokens.Space.s2) {
+                Text("Tween")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                Text("· tap to start")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
             .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private func formatPeekETA(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        return "\(minutes)m"
     }
 
     private var panelDragGesture: some Gesture {
@@ -514,30 +580,116 @@ struct OnboardingView: View {
         }
     }
 
+    private var freshLaunchHero: some View {
+        VStack(spacing: Tokens.Space.s2) {
+            ZStack {
+                Circle()
+                    .fill(Tokens.Palette.brandMuted)
+                Image(systemName: "star.fill")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(Tokens.Palette.brand)
+            }
+            .frame(width: 48, height: 48)
+
+            Text("Where do you want to meet?")
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .multilineTextAlignment(.center)
+
+            Text("Share your location to start, or pick a category.")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, Tokens.Space.s3)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var locationDeniedCard: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s2 + 2) {
+            HStack(spacing: Tokens.Space.s2) {
+                Image(systemName: "location.slash.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Tokens.Palette.warning)
+                Text("Location turned off")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+            }
+            Text("Tween needs your location to find a fair meetup spot. Re-enable it in Settings.")
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Text("Open Settings")
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+        .padding(Tokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.Palette.warning.opacity(0.10), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                .stroke(Tokens.Palette.warning.opacity(0.35), lineWidth: 1)
+        }
+    }
+
+    private var searchErrorCard: some View {
+        VStack(spacing: Tokens.Space.s2 + 2) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(Tokens.Palette.warning)
+            Text(searchError ?? "Something went wrong")
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .multilineTextAlignment(.center)
+            Button(action: searchPlaces) {
+                Text("Try again")
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+        .padding(Tokens.Space.s4)
+        .frame(maxWidth: .infinity)
+        .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+    }
+
     private var categoryChipRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Tokens.Space.s2) {
                 ForEach(CategoryPreset.allCases) { preset in
-                    Button {
-                        searchText = preset.query
-                        searchFocused = true
-                    } label: {
+                    let isSelected = selectedCategory == preset
+                    Button { selectCategory(preset) } label: {
                         HStack(spacing: Tokens.Space.s1 + 2) {
                             Image(systemName: preset.systemImage)
                             Text(preset.label)
                         }
                         .font(Tokens.Typography.callout.weight(.semibold))
-                        .foregroundStyle(Tokens.Palette.onSurface)
+                        .foregroundStyle(isSelected ? Tokens.Palette.brand : Tokens.Palette.onSurface)
                         .padding(.horizontal, Tokens.Space.s3)
                         .padding(.vertical, Tokens.Space.s2)
-                        .background(Tokens.Palette.surface, in: Capsule())
+                        .background(isSelected ? Tokens.Palette.brandMuted : Tokens.Palette.surface, in: Capsule())
                         .overlay {
-                            Capsule().stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+                            Capsule().stroke(isSelected ? Tokens.Palette.brand.opacity(0.55) : Tokens.Palette.glassStroke, lineWidth: isSelected ? 1.2 : 0.5)
                         }
                     }
                     .buttonStyle(.plain)
+                    .animation(Tokens.Motion.snappy, value: isSelected)
                 }
             }
+        }
+    }
+
+    private func selectCategory(_ preset: CategoryPreset) {
+        selectedCategory = preset
+        searchText = preset.query
+        // If both endpoints are set, fire the search immediately — the user has both dots,
+        // there's nothing more to clarify before computing fairness.
+        if savedCoordinate != nil && peerCoordinate != nil {
+            searchPlaces()
+        } else {
+            searchFocused = true
         }
     }
 
@@ -738,9 +890,7 @@ struct OnboardingView: View {
             )
             .foregroundStyle(Tokens.Palette.success)
         case .denied:
-            Label("Location access denied. Enable it in Settings to share your spot.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(Tokens.Palette.warning)
-                .multilineTextAlignment(.center)
+            locationDeniedCard
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(Tokens.Palette.warning)
@@ -887,6 +1037,25 @@ struct OnboardingView: View {
         item.openInMaps(launchOptions: [
             MKLaunchOptionsMapTypeKey: NSNumber(value: MKMapType.standard.rawValue)
         ])
+    }
+
+    /// Stages the chosen spot in the App Group container and opens Messages. The iMessage
+    /// extension picks the draft up in its next `willBecomeActive` and surfaces a
+    /// "Send chosen spot?" confirm in the expanded view.
+    private func sendToChat(_ item: MKMapItem) {
+        guard let coordinate = item.placemark.location?.coordinate else { return }
+        let ranked = rankedSpot(for: item)
+        let draft = OutgoingDraft(
+            name: item.name ?? "the spot",
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            etaFromA: ranked?.etaFromA,
+            etaFromB: ranked?.etaFromB
+        )
+        OutgoingDraftStore.save(draft)
+        if let url = URL(string: "messages://") {
+            UIApplication.shared.open(url)
+        }
     }
 
     private func leaveTween() {
@@ -1160,15 +1329,20 @@ struct OnboardingView: View {
         let isSelected = item == selectedPlace
         return ZStack {
             Circle()
-                .fill((isSelected ? placeColor(for: item) : Color.white).opacity(0.95))
+                .fill((isSelected ? Tokens.Palette.brand : Color.white).opacity(0.95))
                 .frame(width: 34, height: 34)
-                .shadow(color: .black.opacity(0.22), radius: 7, y: 3)
+                .shadow(color: .black.opacity(isSelected ? 0.32 : 0.22), radius: isSelected ? 10 : 7, y: 3)
+                .overlay {
+                    Circle().stroke(Tokens.Palette.brand.opacity(isSelected ? 1 : 0), lineWidth: 2)
+                }
             Image(systemName: placeIcon(for: item))
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(isSelected ? .white : placeColor(for: item))
                 .padding(7)
-                .background(isSelected ? placeColor(for: item) : Color.clear, in: Circle())
+                .background(isSelected ? Tokens.Palette.brand : Color.clear, in: Circle())
         }
+        .scaleEffect(isSelected ? 1.18 : 1)
+        .animation(Tokens.Motion.spring, value: isSelected)
     }
 
     private func placeAnnotation(item: MKMapItem) -> some View {
@@ -1521,6 +1695,7 @@ private struct SpotDetail: View {
     let friendDistance: String?
     let namespace: Namespace.ID
     let onShowOnMap: () -> Void
+    let onSendToChat: () -> Void
     let onOpenInMaps: () -> Void
     let onClose: () -> Void
 
@@ -1580,13 +1755,21 @@ private struct SpotDetail: View {
             .padding(.vertical, Tokens.Space.s2)
 
             VStack(spacing: Tokens.Space.s2) {
+                Button(action: onSendToChat) {
+                    HStack {
+                        Image(systemName: "paperplane.fill")
+                        Text("Send to chat")
+                    }
+                }
+                .buttonStyle(.tweenPrimary)
+
                 Button(action: onShowOnMap) {
                     HStack {
                         Image(systemName: "scope")
                         Text("Show on map")
                     }
                 }
-                .buttonStyle(.tweenPrimary)
+                .buttonStyle(.tweenSubtle)
 
                 Button(action: onOpenInMaps) {
                     HStack {

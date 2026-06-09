@@ -12,8 +12,11 @@ private struct RootView: View {
     let isRequesting: Bool
     let isExpanded: Bool
     let rankedSpots: [RankedSpot]
+    let pendingDraft: OutgoingDraft?
     let onExpand: () -> Void
     let onImIn: () -> Void
+    let onSendDraft: () -> Void
+    let onCancelDraft: () -> Void
 
     var body: some View {
         if isExpanded {
@@ -22,7 +25,10 @@ private struct RootView: View {
                 cachedCoordinate: cachedCoordinate,
                 isRequesting: isRequesting,
                 rankedSpots: rankedSpots,
-                onImIn: onImIn
+                pendingDraft: pendingDraft,
+                onImIn: onImIn,
+                onSendDraft: onSendDraft,
+                onCancelDraft: onCancelDraft
             )
             #if DEBUG
             .overlay(alignment: .top) { DebugCacheOverlay() }
@@ -80,6 +86,7 @@ final class MessagesViewController: MSMessagesAppViewController {
     private var rankedSpots: [RankedSpot] = []
     private var rankingTask: Task<Void, Never>?
     private let locationProvider = LocationProvider()
+    private var pendingDraft: OutgoingDraft?
 
     // MARK: - Conversation lifecycle
 
@@ -90,6 +97,11 @@ final class MessagesViewController: MSMessagesAppViewController {
         received = conversation.selectedMessage?.url.flatMap(TweenState.init(url:))
         if let selectedMessage = conversation.selectedMessage {
             cachePeerLocation(from: selectedMessage, conversation: conversation)
+        }
+        // Pick up a host-staged spot draft and surface a confirm UI in expanded mode.
+        pendingDraft = OutgoingDraftStore.load()
+        if pendingDraft != nil {
+            requestPresentationStyle(.expanded)
         }
         presentUI()
     }
@@ -176,8 +188,11 @@ final class MessagesViewController: MSMessagesAppViewController {
             isRequesting: isRequesting,
             isExpanded: presentationStyle == .expanded,
             rankedSpots: rankedSpots,
+            pendingDraft: pendingDraft,
             onExpand: { [weak self] in self?.requestPresentationStyle(.expanded) },
-            onImIn: { [weak self] in self?.handleImIn() }
+            onImIn: { [weak self] in self?.handleImIn() },
+            onSendDraft: { [weak self] in self?.sendPendingDraft() },
+            onCancelDraft: { [weak self] in self?.discardPendingDraft() }
         )
 
         if let hostingController {
@@ -222,6 +237,19 @@ final class MessagesViewController: MSMessagesAppViewController {
 
     private func sendImIn(_ coordinate: CLLocationCoordinate2D) {
         send(TweenState(text: "I'm in", latitude: coordinate.latitude, longitude: coordinate.longitude))
+    }
+
+    private func sendPendingDraft() {
+        guard let draft = pendingDraft else { return }
+        OutgoingDraftStore.clear()
+        pendingDraft = nil
+        send(TweenState(text: "Meet at \(draft.name)", latitude: draft.latitude, longitude: draft.longitude))
+    }
+
+    private func discardPendingDraft() {
+        OutgoingDraftStore.clear()
+        pendingDraft = nil
+        presentUI()
     }
 
     // MARK: - Sending

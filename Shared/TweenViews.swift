@@ -104,7 +104,10 @@ struct ExpandedView: View {
     let cachedCoordinate: CLLocationCoordinate2D?
     let isRequesting: Bool
     var rankedSpots: [RankedSpot] = []
+    var pendingDraft: OutgoingDraft? = nil
     let onImIn: () -> Void
+    var onSendDraft: () -> Void = {}
+    var onCancelDraft: () -> Void = {}
 
     private var topSpots: [RankedSpot] { Array(rankedSpots.prefix(3)) }
 
@@ -119,6 +122,10 @@ struct ExpandedView: View {
             .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
+                if let pendingDraft {
+                    pendingDraftCard(pendingDraft)
+                }
+
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: Tokens.Space.s1) {
                         Text("Tween")
@@ -180,6 +187,43 @@ struct ExpandedView: View {
             .padding(Tokens.Space.s3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func pendingDraftCard(_ draft: OutgoingDraft) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s2 + 2) {
+            HStack(spacing: Tokens.Space.s2) {
+                ZStack {
+                    Circle().fill(Tokens.Palette.brand)
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Send chosen spot?")
+                        .font(Tokens.Typography.captionEmphasized)
+                    Text("Meet at \(draft.name)")
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+
+            HStack(spacing: Tokens.Space.s2) {
+                Button(action: onSendDraft) {
+                    Text("Send")
+                }
+                .buttonStyle(.tweenPrimary)
+
+                Button(action: onCancelDraft) {
+                    Text("Cancel")
+                }
+                .buttonStyle(.tweenSubtle)
+            }
+        }
+        .padding(Tokens.Space.s3)
+        .background(Tokens.Palette.brandMuted, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
     }
 
     private var fairSpotsRow: some View {
