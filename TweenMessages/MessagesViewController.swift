@@ -117,6 +117,7 @@ final class MessagesViewController: MSMessagesAppViewController {
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
         super.didReceive(message, conversation: conversation)
         cachePeerLocation(from: message, conversation: conversation)
+        PingLog.lastIncomingReplyAt = Date()
         if presentationStyle == .expanded {
             kickOffRanking()
         }

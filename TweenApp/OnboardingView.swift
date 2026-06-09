@@ -42,6 +42,8 @@ struct OnboardingView: View {
     @State private var showTutorial = !OnboardingFlags.hasSeenOnboarding
     @State private var showShareSheet = false
     @State private var monitor = NetworkMonitor()
+    @State private var pingTick = Date()
+    @State private var lastReplyAt: Date? = PingLog.lastIncomingReplyAt
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
 
@@ -901,6 +903,7 @@ struct OnboardingView: View {
 
     private var friendList: some View {
         VStack(spacing: Tokens.Space.s3) {
+            if showReplyBanner { replyBanner }
             ForEach(friends) { friend in
                 HStack(spacing: Tokens.Space.s3) {
                     Text(initials(for: friend))
@@ -909,13 +912,19 @@ struct OnboardingView: View {
                         .frame(width: 36, height: 36)
                         .background(color(for: friend), in: Circle())
 
-                    Text(friend.name)
-                        .font(Tokens.Typography.headline)
-                        .foregroundStyle(Tokens.Palette.onSurface)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(friend.name)
+                            .font(Tokens.Typography.headline)
+                            .foregroundStyle(Tokens.Palette.onSurface)
+                        Text(pingStatusText(for: friend))
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(pingStatusColor(for: friend))
+                    }
 
                     Spacer()
 
                     Menu {
+                        Button("Ping", systemImage: "paperplane.fill") { pingFriend(friend) }
                         Button("Rename") { beginRename(friend) }
                         Button("Delete", role: .destructive) { deleteFriend(friend) }
                     } label: {
@@ -938,6 +947,63 @@ struct OnboardingView: View {
                         .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
                 }
             }
+        }
+    }
+
+    private var replyBanner: some View {
+        HStack(spacing: Tokens.Space.s2) {
+            ZStack {
+                Circle().fill(Tokens.Palette.brand)
+                Image(systemName: "paperplane.fill")
+                    .font(Tokens.Typography.iconBadge)
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 24, height: 24)
+            if let lastReplyAt {
+                Text("Someone replied \(RelativeTime.formatShort(since: lastReplyAt))")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, Tokens.Space.s3)
+        .padding(.vertical, Tokens.Space.s2)
+        .background(Tokens.Palette.brandMuted, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var showReplyBanner: Bool {
+        guard let lastReplyAt else { return false }
+        return Date().timeIntervalSince(lastReplyAt) < 3600
+    }
+
+    private enum PingStatus {
+        case pinged(Date)
+        case replied(Date)
+        case never
+    }
+
+    private func pingStatus(for friend: TweenFriend) -> PingStatus {
+        let pinged = PingLog.pingedAt(friend.id)
+        if let reply = lastReplyAt, let p = pinged, reply > p, Date().timeIntervalSince(reply) < 3600 {
+            return .replied(reply)
+        }
+        if let p = pinged { return .pinged(p) }
+        return .never
+    }
+
+    private func pingStatusText(for friend: TweenFriend) -> String {
+        switch pingStatus(for: friend) {
+        case let .replied(date): return "Replied \(RelativeTime.formatShort(since: date))"
+        case let .pinged(date):  return "Pinged \(RelativeTime.formatShort(since: date))"
+        case .never:             return "Not yet pinged"
+        }
+    }
+
+    private func pingStatusColor(for friend: TweenFriend) -> Color {
+        switch pingStatus(for: friend) {
+        case .replied: return Tokens.Palette.brand
+        default:       return Tokens.Palette.onSurfaceMuted
         }
     }
 
@@ -1060,11 +1126,22 @@ struct OnboardingView: View {
     }
 
     private func imInForGroup() {
+        // Stamp every roster member with the current time so the Waiting tab reads
+        // "Pinged just now" — gives the tab its weight.
+        for friend in friends {
+            PingLog.setPingedAt(friend.id)
+        }
+        pingTick = Date()
         if savedCoordinate != nil {
             focusOnPeople()
             return
         }
         pendingShare = .initial
+    }
+
+    private func pingFriend(_ friend: TweenFriend) {
+        PingLog.setPingedAt(friend.id)
+        pingTick = Date()
     }
 
     private func beginAdd() {
@@ -1095,6 +1172,8 @@ struct OnboardingView: View {
     private func deleteFriend(_ friend: TweenFriend) {
         friends.removeAll { $0.id == friend.id }
         FriendRoster.save(friends)
+        PingLog.clearPing(friend.id)
+        pingTick = Date()
     }
 
     private func initials(for friend: TweenFriend) -> String {
@@ -1231,6 +1310,8 @@ struct OnboardingView: View {
 
     private func refreshSavedLocation(forceFocus: Bool = false) {
         friends = FriendRoster.load()
+        let latestReply = PingLog.lastIncomingReplyAt
+        if latestReply != lastReplyAt { lastReplyAt = latestReply }
         let latestSaved = LocationCache.load()
         let latestPeer = LocationCache.loadPeer()
         let peerJustAppeared = peerCoordinate == nil && latestPeer != nil
