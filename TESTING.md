@@ -45,7 +45,7 @@ both must be able to iMessage each other (blue bubbles). Call them **A** (sender
 ### Test 1 — Send a bubble with state (Phase 1, step 1)
 1. On **A**, open Messages → the conversation with **B**.
 2. Tap the Apps icon next to the text field, open **Tween**.
-3. The extension opens **compact** (keyboard height): caption + placeholder coordinate +
+3. The extension opens **compact** (keyboard height): caption + neutral map placeholder +
    "Tap to open". Tap it → it expands.
 4. In the expanded view, tap **Send update**. A Tween bubble is inserted into the input
    field. Tap the send arrow to send it to **B**.
@@ -54,7 +54,7 @@ both must be able to iMessage each other (blue bubbles). Call them **A** (sender
 ### Test 2 — Recipient taps the bubble and reads state back (Phase 1, step 2)
 1. On **B**, tap the Tween bubble just received.
    - ✅ Pass: the extension opens and the **Received state** panel shows the *same* message
-     text and coordinate **A** sent (not the placeholder). This confirms the state was read
+     text and coordinate **A** sent. This confirms the state was read
      back out of `MSMessage.url` in `willBecomeActive`.
 
 ### Test 3 — Recipient sends modified state back (Phase 1, step 3)
@@ -80,7 +80,7 @@ is the full round-trip.
 # Testing Tween — Phase 2 (location, once)
 
 Phase 2 captures the user's location one time in the app, caches it to the shared App Group
-container (`group.com.kavigandham.tween`), and reuses it from the extension's "I'm in" control.
+container (`group.com.hassanahmed.tween`), and reuses it from the extension's "I'm in" control.
 
 ## What is verified automatically
 
@@ -110,7 +110,7 @@ the two-device test below.
 ## Two-device manual test (builds on Phase 1 setup)
 
 Prerequisite: a valid signing Team on **both** targets (already set: `T4VT6R837D`), so Xcode
-can provision the `group.com.kavigandham.tween` App Group when you build to a device.
+can provision the `group.com.hassanahmed.tween` App Group when you build to a device.
 
 ### Test 4 — Capture location in the app
 1. Run the `TweenApp` scheme on device **A**. On the onboarding screen tap **Share my

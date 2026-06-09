@@ -3,7 +3,7 @@ import MapKit
 import SwiftUI
 import UIKit
 
-/// Formats a coordinate for compact display, e.g. "37.3349, -122.0090".
+/// Formats a coordinate for compact display, e.g. "40.7128, -74.0060".
 func formatCoordinate(latitude: Double, longitude: Double) -> String {
     String(format: "%.4f, %.4f", latitude, longitude)
 }
@@ -24,9 +24,13 @@ struct CompactView: View {
     let onTap: () -> Void
     let onImIn: () -> Void
 
+    private var receivedCoordinate: CLLocationCoordinate2D? {
+        state == .placeholder ? nil : state.coordinate
+    }
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            TweenMapSnapshotView(received: state.coordinate, cachedCoordinate: nil)
+            TweenMapSnapshotView(received: receivedCoordinate, cachedCoordinate: nil)
 
             HStack(spacing: 10) {
                 Button(action: onTap) {
@@ -246,9 +250,14 @@ private struct TweenMapSnapshotView: View {
                         .resizable()
                         .scaledToFill()
                 } else {
-                    Rectangle()
-                        .fill(.tertiary.opacity(0.35))
-                    ProgressView()
+                    LinearGradient(
+                        colors: [.blue.opacity(0.20), .green.opacity(0.12), .secondary.opacity(0.10)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    Image(systemName: "map")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -272,10 +281,11 @@ private struct TweenMapSnapshotView: View {
     }
 
     private func makeSnapshot(size: CGSize) async -> UIImage? {
+        guard let region = snapshotRegion() else { return nil }
         let options = MKMapSnapshotter.Options()
         options.size = size
         options.scale = UIScreen.main.scale
-        options.region = snapshotRegion()
+        options.region = region
 
         let snapshotter = MKMapSnapshotter(options: options)
         do {
@@ -286,15 +296,10 @@ private struct TweenMapSnapshotView: View {
         }
     }
 
-    private func snapshotRegion() -> MKCoordinateRegion {
+    private func snapshotRegion() -> MKCoordinateRegion? {
         // Fit endpoints AND ranked spots in the same frame so all pins are visible.
         let coordinates = ([received, cachedCoordinate].compactMap { $0 }) + rankedCoordinates
-        guard let first = coordinates.first else {
-            return MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
-                span: MKCoordinateSpan(latitudeDelta: 0.035, longitudeDelta: 0.035)
-            )
-        }
+        guard let first = coordinates.first else { return nil }
 
         let minLatitude = coordinates.map(\.latitude).min() ?? first.latitude
         let maxLatitude = coordinates.map(\.latitude).max() ?? first.latitude
@@ -378,8 +383,8 @@ private struct TweenMapSnapshotView: View {
 
 #Preview("Expanded — cached") {
     ExpandedView(
-        received: TweenState(text: "Lunch at Caffè Macs?", latitude: 37.3349, longitude: -122.0090),
-        cachedCoordinate: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
+        received: TweenState(text: "Lunch?", latitude: 40.7128, longitude: -74.0060),
+        cachedCoordinate: CLLocationCoordinate2D(latitude: 40.7306, longitude: -73.9352),
         isRequesting: false,
         onImIn: {}
     )

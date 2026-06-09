@@ -3,7 +3,7 @@ import Foundation
 
 /// The state carried inside a Tween message bubble.
 ///
-/// Phase 1 carries a test string plus a placeholder coordinate. The whole state is encoded
+/// Carries an "I'm in" string plus a real coordinate. The whole state is encoded
 /// into `MSMessage.url` as query items (https scheme, well under the 5000-char limit) so it
 /// round-trips through the Messages thread without any server.
 struct TweenState: Equatable {
@@ -20,8 +20,8 @@ extension TweenState {
     /// A neutral default shown before any real state has been received.
     static let placeholder = TweenState(
         text: "Open Tween",
-        latitude: 37.3349,
-        longitude: -122.0090
+        latitude: 0,
+        longitude: 0
     )
 
     private enum Key {

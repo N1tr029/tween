@@ -21,16 +21,50 @@ struct OnboardingView: View {
     @State private var selectedPlace: MKMapItem?
     @State private var searchError: String?
     @State private var panelDetent: PanelDetent = .medium
-    @State private var position = MapCameraPosition.region(
-        MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
-            span: MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
-        )
+    @State private var panelTab: HomePanelTab = .map
+    @State private var position = MapCameraPosition.automatic
+    @State private var lastVisibleRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 39.8283, longitude: -98.5795),
+        span: MKCoordinateSpan(latitudeDelta: 35, longitudeDelta: 55)
     )
+    @State private var mapDisplayMode: MapDisplayMode = .standard
+    @State private var showsTraffic = false
 
     var body: some View {
         ZStack(alignment: .top) {
-            Map(position: $position, bounds: MapCameraBounds(minimumDistance: 200, maximumDistance: 2_000_000)) {
+            styledMap
+                .ignoresSafeArea()
+
+            searchBar
+
+            VStack {
+                HStack {
+                    Spacer()
+                    mapControls
+                }
+                .padding(.top, 74)
+                .padding(.horizontal, 16)
+                Spacer()
+            }
+
+            VStack {
+                Spacer()
+                bottomPanel
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .onAppear(perform: prepareInitialMap)
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            refreshSavedLocation()
+        }
+        .task {
+            await pollSharedLocations()
+        }
+    }
+
+    private var mapCanvas: some View {
+        Map(position: $position, bounds: MapCameraBounds(minimumDistance: 200, maximumDistance: 2_000_000)) {
                 if let coordinate = savedCoordinate {
                     Annotation("You", coordinate: coordinate) {
                         mapDot(color: .blue, systemImage: "person.fill")
@@ -55,36 +89,27 @@ struct OnboardingView: View {
                                 selectedPlace = item
                                 centerMap(on: coordinate, avoidingBottomOverlay: true)
                             } label: {
-                                placeDot(item: item)
+                                placeAnnotation(item: item)
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
             }
-            .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .including([.cafe, .restaurant, .publicTransport])))
-            .ignoresSafeArea()
-
-            VStack(spacing: 8) {
-                searchBar
-                #if DEBUG
-                debugCachePanel
-                #endif
+            .onMapCameraChange(frequency: .continuous) { context in
+                lastVisibleRegion = context.region
             }
+    }
 
-            VStack {
-                Spacer()
-                bottomPanel
-            }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-        }
-        .onAppear(perform: prepareInitialMap)
-        .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
-            refreshSavedLocation()
-        }
-        .task {
-            await pollSharedLocations()
+    @ViewBuilder
+    private var styledMap: some View {
+        switch mapDisplayMode {
+        case .standard:
+            mapCanvas
+                .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .including([.cafe, .restaurant, .publicTransport]), showsTraffic: showsTraffic))
+        case .satellite:
+            mapCanvas
+                .mapStyle(.hybrid(elevation: .realistic, pointsOfInterest: .including([.cafe, .restaurant, .publicTransport]), showsTraffic: showsTraffic))
         }
     }
 
@@ -185,6 +210,54 @@ struct OnboardingView: View {
         .padding(.top, 12)
     }
 
+    private var mapControls: some View {
+        VStack(spacing: 8) {
+            Menu {
+                ForEach(MapDisplayMode.allCases) { mode in
+                    Button {
+                        setMapDisplayMode(mode)
+                    } label: {
+                        Label(mode.title, systemImage: mapDisplayMode == mode ? "checkmark" : mode.systemImage)
+                    }
+                }
+            } label: {
+                Image(systemName: mapDisplayMode.systemImage)
+                    .font(.headline)
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Map style")
+
+            Button {
+                setTrafficVisible(!showsTraffic)
+            } label: {
+                Image(systemName: showsTraffic ? "car.fill" : "car")
+                    .font(.headline)
+                    .foregroundStyle(showsTraffic ? .white : .primary)
+                    .frame(width: 42, height: 42)
+                    .background(showsTraffic ? Color.blue : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsTraffic ? "Hide traffic" : "Show traffic")
+
+            Divider()
+                .frame(width: 28)
+
+            Button(action: resetMap) {
+                Image(systemName: "location.north.line.fill")
+                    .font(.headline)
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Reset map")
+        }
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: mapDisplayMode)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: showsTraffic)
+    }
+
     private var bottomPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 14) {
@@ -208,29 +281,42 @@ struct OnboardingView: View {
                         .foregroundStyle(savedCoordinate == nil ? Color.secondary : Color.green)
                 }
 
-                if panelDetent != .full {
+                Picker("View", selection: $panelTab) {
+                    ForEach(HomePanelTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if panelDetent != .full, panelTab == .map {
                     statusView
                 }
 
-                if !searchResults.isEmpty {
-                    placeResultsList
-                } else if let searchError {
-                    Label(searchError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(.orange)
+                switch panelTab {
+                case .map:
+                    if !searchResults.isEmpty {
+                        placeResultsList
+                    } else if let searchError {
+                        Label(searchError, systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                    }
+                case .group:
+                    groupTab
                 }
 
-                if panelDetent != .full {
+                if panelDetent != .full, panelTab == .map {
                     actionControls
                 }
             }
             .padding(.horizontal, 20)
             .padding(.top, searchResults.isEmpty ? 20 : 10)
-            .padding(.bottom, 20)
+            .padding(.bottom, searchResults.isEmpty ? 34 : 24)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: panelHeight, alignment: .top)
             .background(.regularMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24))
             .gesture(panelDragGesture)
+            .animation(.spring(response: 0.24, dampingFraction: 0.9), value: panelDetent)
         }
     }
 
@@ -246,7 +332,7 @@ struct OnboardingView: View {
         DragGesture(minimumDistance: 18)
             .onEnded { value in
                 guard !searchResults.isEmpty else { return }
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
                     if value.translation.height < -50 {
                         panelDetent = panelDetent.nextHigher
                     } else if value.translation.height > 50 {
@@ -257,13 +343,13 @@ struct OnboardingView: View {
     }
 
     private var panelHeight: CGFloat? {
-        guard !searchResults.isEmpty else { return nil }
+        guard !searchResults.isEmpty || panelTab == .group else { return nil }
         let screenHeight = UIScreen.main.bounds.height
         switch panelDetent {
         case .compact:
-            return 238
+            return panelTab == .group ? 360 : 238
         case .medium:
-            return min(430, screenHeight * 0.48)
+            return panelTab == .group ? min(500, screenHeight * 0.56) : min(430, screenHeight * 0.48)
         case .full:
             return screenHeight - 92
         }
@@ -320,18 +406,27 @@ struct OnboardingView: View {
     }
 
     private var placeResultsList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Options")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Places")
+                        .font(.title3.weight(.bold))
+                    Text(resultsSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Spacer()
+
                 Text("\(searchResults.count)")
-                    .font(.caption.weight(.semibold))
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
+                    .frame(minWidth: 26, minHeight: 26)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
             }
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 8) {
+                VStack(spacing: 12) {
                     ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
                         placeResultRow(item: item, index: index)
                     }
@@ -341,90 +436,250 @@ struct OnboardingView: View {
         }
     }
 
+    private var groupTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Group")
+                        .font(.title3.weight(.bold))
+                    Text(groupSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(TweenFriend.defaultFriends.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 26, minHeight: 26)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
+            }
+
+            VStack(spacing: 8) {
+                ForEach(TweenFriend.defaultFriends) { friend in
+                    HStack(spacing: 10) {
+                        Text(friend.initials)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(friend.color, in: Circle())
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(friend.name)
+                                .font(.subheadline.weight(.semibold))
+                            Text(friend.status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Image(systemName: friend.isIn ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(friend.isIn ? .green : .secondary)
+                    }
+                    .padding(10)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+
+            Button(action: imInForGroup) {
+                HStack {
+                    if isRequesting { ProgressView().tint(.white) }
+                    Text(savedCoordinate == nil ? "Share location & say I'm in" : "I'm in for this group")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 8))
+            .disabled(isRequesting)
+        }
+    }
+
+    private var groupSubtitle: String {
+        if savedCoordinate == nil { return "Share your real dot with your set friends" }
+        if peerCoordinate == nil { return "Your dot is active; waiting for friends" }
+        return "You and a friend are \(distanceText) apart"
+    }
+
+    private var resultsSubtitle: String {
+        if !rankedSpots.isEmpty { return "Sorted by fair travel time" }
+        if savedCoordinate != nil || peerCoordinate != nil { return "Distances update as people join" }
+        return "Tap a place to preview it on the map"
+    }
+
     private var placeListHeight: CGFloat {
         switch panelDetent {
         case .compact:
-            return 102
+            return 176
         case .medium:
-            return 220
+            return 360
         case .full:
-            return UIScreen.main.bounds.height - 250
+            return UIScreen.main.bounds.height - 230
         }
     }
 
     private func placeResultRow(item: MKMapItem, index: Int) -> some View {
         let isSelected = item == selectedPlace
 
-        return Button {
-            selectedPlace = item
-            if let coordinate = item.placemark.location?.coordinate {
-                centerMap(on: coordinate, avoidingBottomOverlay: true)
-            }
-        } label: {
-            HStack(spacing: 10) {
-                ZStack(alignment: .bottomTrailing) {
-                    PlaceThumbnailView(coordinate: item.placemark.location?.coordinate)
-                        .frame(width: 56, height: 56)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+        return
+            VStack(alignment: .leading, spacing: 12) {
+                ZStack(alignment: .topLeading) {
+                    PlacePreviewCarousel(coordinate: item.placemark.location?.coordinate)
+                        .frame(height: panelDetent == .compact ? 118 : 150)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                    Image(systemName: placeIcon(for: item))
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 24, height: 24)
-                        .background(placeColor(for: item), in: Circle())
-                        .overlay {
-                            Circle().stroke(.white, lineWidth: 2)
-                        }
+                    HStack(spacing: 8) {
+                        Image(systemName: placeIcon(for: item))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 28, height: 28)
+                            .background(placeColor(for: item), in: Circle())
+                            .overlay {
+                                Circle().stroke(.white, lineWidth: 2)
+                            }
+
+                        Text(placeTypeLabel(for: item))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 9)
+                            .frame(height: 28)
+                            .background(.black.opacity(0.42), in: Capsule())
+                    }
+                    .padding(10)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.name ?? "Place")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(item.name ?? "Place")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 0)
+
+                        Text("\(index + 1)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(isSelected ? .white : .secondary)
+                            .frame(width: 28, height: 28)
+                            .background(isSelected ? Color.blue : Color.secondary.opacity(0.15), in: Circle())
+                    }
+
                     Text(item.placemark.title ?? "Nearby")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
 
                     if let ranked = rankedSpot(for: item) {
                         HStack(spacing: 8) {
-                            distanceChip("You", formatETA(ranked.etaFromA))
-                            distanceChip("Friend", formatETA(ranked.etaFromB))
-                            distanceChip("Gap", formatETA(ranked.fairnessGap))
+                            fairnessBadge(for: ranked)
+                            Text(fairnessSummary(for: ranked, index: index))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+                        }
+
+                        LazyVGrid(columns: metricColumns, spacing: 8) {
+                            personMetric(title: "You", value: formatETA(ranked.etaFromA), color: .blue)
+                            personMetric(title: "Friend", value: formatETA(ranked.etaFromB), color: .orange)
+                            personMetric(title: "Gap", value: formatETA(ranked.fairnessGap), color: fairnessColor(for: ranked))
                         }
                     } else {
-                        HStack(spacing: 8) {
-                            distanceChip("You", distanceFrom(savedCoordinate, to: item))
-                            distanceChip("Friend", distanceFrom(peerCoordinate, to: item))
-                            distanceChip("Middle", distanceFrom(midpointCoordinate, to: item))
+                        LazyVGrid(columns: metricColumns, spacing: 8) {
+                            personMetric(title: "You", value: distanceFrom(savedCoordinate, to: item) ?? "--", color: .blue)
+                            personMetric(title: "Friend", value: distanceFrom(peerCoordinate, to: item) ?? "--", color: .orange)
+                            personMetric(title: "Middle", value: distanceFrom(midpointCoordinate, to: item) ?? "--", color: .green)
                         }
                     }
-                }
-                Spacer(minLength: 0)
 
-                Text("\(index + 1)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(isSelected ? .white : .secondary)
-                    .frame(width: 26, height: 26)
-                    .background(isSelected ? Color.green : Color.secondary.opacity(0.15), in: Circle())
+                    Button {
+                        selectPlaceOnMap(item)
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "scope")
+                            Text(isSelected ? "Showing on map" : "Show on map")
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.bold))
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(isSelected ? .white : .blue)
+                        .padding(.horizontal, 12)
+                        .frame(height: 40)
+                        .background(isSelected ? Color.blue : Color.blue.opacity(0.11), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
             }
-            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
+            .background(.background.opacity(isSelected ? 0.92 : 0.78), in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(isSelected ? Color.blue.opacity(0.55) : Color.secondary.opacity(0.12), lineWidth: isSelected ? 1.5 : 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    private func distanceChip(_ label: String, _ distance: String?) -> some View {
-        Group {
-            if let distance {
-                Text("\(label) \(distance)")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
+    private var metricColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(minimum: 82), spacing: 8), count: 3)
+    }
+
+    private func personMetric(title: String, value: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .foregroundStyle(.primary)
+        }
+        .font(.caption2.weight(.semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.10), in: Capsule())
+    }
+
+    private func fairnessBadge(for ranked: RankedSpot) -> some View {
+        Text("\(fairnessScore(for: ranked)) fair")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(fairnessColor(for: ranked))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(fairnessColor(for: ranked).opacity(0.14), in: Capsule())
+    }
+
+    private func fairnessSummary(for ranked: RankedSpot, index: Int) -> String {
+        let worse = formatETA(ranked.worseETA)
+        let gap = formatETA(ranked.fairnessGap)
+        if index == 0 {
+            return "Best balance · longest trip \(worse) · split gap \(gap)"
+        }
+        return "Longest trip \(worse) · split gap \(gap)"
+    }
+
+    private func fairnessScore(for ranked: RankedSpot) -> Int {
+        let gapMinutes = ranked.fairnessGap / 60
+        let worseMinutes = max(ranked.worseETA / 60, 1)
+        let balancePenalty = min(45, (gapMinutes / worseMinutes) * 45)
+        let longTripPenalty = min(25, worseMinutes / 3)
+        let confidenceBonus = ranked.confidence * 8
+        return max(1, min(100, Int((100 - balancePenalty - longTripPenalty + confidenceBonus).rounded())))
+    }
+
+    private func fairnessColor(for ranked: RankedSpot) -> Color {
+        switch fairnessScore(for: ranked) {
+        case 82...:
+            return .green
+        case 60..<82:
+            return .orange
+        default:
+            return .red
         }
     }
 
@@ -507,6 +762,21 @@ struct OnboardingView: View {
         }
     }
 
+    private func imInForGroup() {
+        if savedCoordinate != nil {
+            focusOnPeople()
+            return
+        }
+        updateMyDot()
+    }
+
+    private func selectPlaceOnMap(_ item: MKMapItem) {
+        selectedPlace = item
+        if let coordinate = item.placemark.location?.coordinate {
+            centerMap(on: coordinate, avoidingBottomOverlay: true)
+        }
+    }
+
     private func leaveTween() {
         LocationCache.clearAll()
         savedCoordinate = nil
@@ -516,12 +786,49 @@ struct OnboardingView: View {
         searchError = nil
         provider = LocationProvider()
         withAnimation(.easeInOut(duration: 0.35)) {
-            position = MapCameraPosition.region(
-                MKCoordinateRegion(
-                    center: CLLocationCoordinate2D(latitude: 37.3349, longitude: -122.0090),
-                    span: MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
-                )
-            )
+            position = .automatic
+        }
+    }
+
+    private func setMapDisplayMode(_ mode: MapDisplayMode) {
+        let preservedRegion = lastVisibleRegion
+        withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) {
+            mapDisplayMode = mode
+        }
+        restoreCamera(after: preservedRegion, refocusPlacesIfNeeded: true)
+    }
+
+    private func setTrafficVisible(_ isVisible: Bool) {
+        let preservedRegion = lastVisibleRegion
+        withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) {
+            showsTraffic = isVisible
+        }
+        restoreCamera(after: preservedRegion, refocusPlacesIfNeeded: true)
+    }
+
+    private func restoreCamera(after region: MKCoordinateRegion, refocusPlacesIfNeeded: Bool = false) {
+        position = .region(region)
+        DispatchQueue.main.async {
+            position = .region(region)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            if refocusPlacesIfNeeded, !searchResults.isEmpty {
+                focusOnPlacesAndPeople(animated: false)
+            } else {
+                position = .region(region)
+            }
+        }
+    }
+
+    private func resetMap() {
+        if !searchResults.isEmpty {
+            focusOnPlacesAndPeople()
+        } else if savedCoordinate != nil || peerCoordinate != nil {
+            focusOnPeople()
+        } else {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                position = .automatic
+            }
         }
     }
 
@@ -571,7 +878,7 @@ struct OnboardingView: View {
     private func focusOnPeople() {
         let coordinates = [savedCoordinate, displayPeerCoordinate].compactMap { $0 }
         guard let region = framedRegion(for: coordinates) else { return }
-        withAnimation(.easeInOut(duration: 0.45)) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
             position = .region(region)
         }
     }
@@ -629,11 +936,15 @@ struct OnboardingView: View {
         rankedSpots.first { $0.item == item }
     }
 
-    private func focusOnPlacesAndPeople() {
+    private func focusOnPlacesAndPeople(animated: Bool = true) {
         var coordinates = [savedCoordinate, displayPeerCoordinate].compactMap { $0 }
         coordinates.append(contentsOf: searchResults.compactMap { $0.placemark.location?.coordinate })
         guard let region = framedRegion(for: coordinates, paddingFactor: 0.4, minimumDelta: 0.025) else { return }
-        withAnimation(.easeInOut(duration: 0.45)) {
+        guard animated else {
+            position = .region(region)
+            return
+        }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
             position = .region(region)
         }
     }
@@ -751,6 +1062,32 @@ struct OnboardingView: View {
         }
     }
 
+    private func placeAnnotation(item: MKMapItem) -> some View {
+        VStack(spacing: 5) {
+            if let bubbleText = placeDistanceBubble(for: item) {
+                Text(bubbleText)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .padding(.horizontal, 7)
+                    .frame(height: 24)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay {
+                        Capsule().stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+                    }
+            }
+            placeDot(item: item)
+        }
+    }
+
+    private func placeDistanceBubble(for item: MKMapItem) -> String? {
+        guard savedCoordinate != nil || peerCoordinate != nil else { return nil }
+        let you = distanceFrom(savedCoordinate, to: item) ?? "--"
+        let friend = distanceFrom(peerCoordinate, to: item) ?? "--"
+        return "A \(you) · B \(friend)"
+    }
+
     private func placeIcon(for item: MKMapItem) -> String {
         let category = placeCategoryText(for: item)
         if category.contains("coffee") || category.contains("cafe") || category.contains("starbucks") {
@@ -806,11 +1143,94 @@ struct OnboardingView: View {
         return .blue
     }
 
+    private func placeTypeLabel(for item: MKMapItem) -> String {
+        let category = placeCategoryText(for: item)
+        if category.contains("coffee") || category.contains("cafe") || category.contains("starbucks") {
+            return "Coffee"
+        }
+        if category.contains("restaurant") || category.contains("food") || category.contains("pizza") || category.contains("bakery") {
+            return "Food"
+        }
+        if category.contains("park") || category.contains("recreation") || category.contains("trail") {
+            return "Recreation"
+        }
+        if category.contains("movie") || category.contains("theater") || category.contains("museum") || category.contains("entertainment") {
+            return "Entertainment"
+        }
+        if category.contains("fitness") || category.contains("gym") || category.contains("sports") {
+            return "Fitness"
+        }
+        if category.contains("store") || category.contains("shop") || category.contains("market") {
+            return "Shopping"
+        }
+        if category.contains("transport") || category.contains("station") || category.contains("airport") {
+            return "Transit"
+        }
+        return "Place"
+    }
+
     private func placeCategoryText(for item: MKMapItem) -> String {
         [item.pointOfInterestCategory?.rawValue, item.name]
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
     }
+}
+
+private enum MapDisplayMode: String, CaseIterable, Identifiable {
+    case standard
+    case satellite
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .standard: "Map"
+        case .satellite: "Satellite"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .standard: "map"
+        case .satellite: "map.fill"
+        }
+    }
+}
+
+private enum HomePanelTab: String, CaseIterable, Identifiable {
+    case map
+    case group
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .map: "Map"
+        case .group: "Group"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .map: "map"
+        case .group: "person.2.fill"
+        }
+    }
+}
+
+private struct TweenFriend: Identifiable {
+    let id = UUID()
+    let name: String
+    let initials: String
+    let status: String
+    let isIn: Bool
+    let color: Color
+
+    static let defaultFriends: [TweenFriend] = [
+        TweenFriend(name: "Maya", initials: "M", status: "Set friend", isIn: true, color: .blue),
+        TweenFriend(name: "Jordan", initials: "J", status: "Waiting for I'm in", isIn: false, color: .orange),
+        TweenFriend(name: "Sam", initials: "S", status: "Available", isIn: false, color: .green),
+    ]
 }
 
 private enum PanelDetent {
@@ -835,8 +1255,53 @@ private enum PanelDetent {
     }
 }
 
+private struct PlacePreviewCarousel: View {
+    let coordinate: CLLocationCoordinate2D?
+
+    var body: some View {
+        TabView {
+            ForEach(PlacePreviewVariant.allCases) { variant in
+                PlaceThumbnailView(coordinate: coordinate, variant: variant)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .automatic))
+        .indexViewStyle(.page(backgroundDisplayMode: .always))
+    }
+}
+
+private enum PlacePreviewVariant: String, CaseIterable, Identifiable {
+    case street
+    case satellite
+    case area
+
+    var id: String { rawValue }
+
+    var mapType: MKMapType {
+        switch self {
+        case .street:
+            return .standard
+        case .satellite:
+            return .hybrid
+        case .area:
+            return .mutedStandard
+        }
+    }
+
+    var span: MKCoordinateSpan {
+        switch self {
+        case .street:
+            return MKCoordinateSpan(latitudeDelta: 0.0035, longitudeDelta: 0.0035)
+        case .satellite:
+            return MKCoordinateSpan(latitudeDelta: 0.0025, longitudeDelta: 0.0025)
+        case .area:
+            return MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
+        }
+    }
+}
+
 private struct PlaceThumbnailView: View {
     let coordinate: CLLocationCoordinate2D?
+    let variant: PlacePreviewVariant
     @State private var image: UIImage?
 
     var body: some View {
@@ -863,17 +1328,19 @@ private struct PlaceThumbnailView: View {
     }
 
     private var thumbnailKey: String {
-        coordinate.map { formatCoordinate(latitude: $0.latitude, longitude: $0.longitude) } ?? "nil"
+        let coordinateKey = coordinate.map { formatCoordinate(latitude: $0.latitude, longitude: $0.longitude) } ?? "nil"
+        return "\(coordinateKey)-\(variant.rawValue)"
     }
 
     private func makeThumbnail() async -> UIImage? {
         guard let coordinate else { return nil }
         let options = MKMapSnapshotter.Options()
-        options.size = CGSize(width: 112, height: 112)
+        options.size = CGSize(width: 640, height: 320)
         options.scale = UIScreen.main.scale
+        options.mapType = variant.mapType
         options.region = MKCoordinateRegion(
             center: coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
+            span: variant.span
         )
 
         do {

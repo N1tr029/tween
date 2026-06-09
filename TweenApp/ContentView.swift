@@ -24,7 +24,7 @@ struct ContentView: View {
 /// Dev-only: renders the exact compact and expanded views the iMessage extension hosts, so they
 /// can be screenshotted on the simulator (the live in-Messages flow is a two-device check).
 private struct ViewHarness: View {
-    private let received = TweenState(text: "Lunch at Caffè Macs?", latitude: 37.7749, longitude: -122.4194)   // SF
+    private let received = TweenState(text: "Lunch?", latitude: 40.7128, longitude: -74.0060)                 // NYC
     private let cached = CLLocationCoordinate2D(latitude: 37.4419, longitude: -122.1430)                       // Palo Alto
     private let rankedSpots: [RankedSpot] = ViewHarness.makeFakeRankedSpots()
 
