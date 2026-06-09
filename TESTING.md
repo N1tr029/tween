@@ -80,7 +80,7 @@ is the full round-trip.
 # Testing Tween — Phase 2 (location, once)
 
 Phase 2 captures the user's location one time in the app, caches it to the shared App Group
-container (`group.com.hassanahmed.tween`), and reuses it from the extension's "I'm in" control.
+container (`group.com.kavigandham.tween`), and reuses it from the extension's "I'm in" control.
 
 ## What is verified automatically
 
@@ -110,7 +110,7 @@ the two-device test below.
 ## Two-device manual test (builds on Phase 1 setup)
 
 Prerequisite: a valid signing Team on **both** targets (already set: `T4VT6R837D`), so Xcode
-can provision the `group.com.hassanahmed.tween` App Group when you build to a device.
+can provision the `group.com.kavigandham.tween` App Group when you build to a device.
 
 ### Test 4 — Capture location in the app
 1. Run the `TweenApp` scheme on device **A**. On the onboarding screen tap **Share my

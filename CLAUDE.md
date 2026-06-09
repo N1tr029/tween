@@ -3,7 +3,7 @@
 - Plan mode first. Small slices. Build + screenshot to verify before claiming done.
 - After every verified slice: commit (Conventional Commits) and push. Never push non-building code.
 ## Architecture
-- Targets: TweenApp, TweenMessages + Shared/. App Group: group.com.hassanahmed.tween
+- Targets: TweenApp, TweenMessages + Shared/. App Group: group.com.kavigandham.tween
 - No server in the MVP. MapKit only. Coordinates passed via MSMessage.url query items.
 ## Hard constraints (DO NOT VIOLATE)
 - Extension memory is tight: MKMapSnapshotter (static image), NOT a live MKMapView.
