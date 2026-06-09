@@ -22,6 +22,8 @@
 		AA0000000000000000000106 /* FairnessRanker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000203 /* FairnessRanker.swift */; };
 		AA0000000000000000000107 /* TweenFriend.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000204 /* TweenFriend.swift */; };
 		AA0000000000000000000108 /* TweenFriend.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000204 /* TweenFriend.swift */; };
+		AA0000000000000000000109 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000205 /* Tokens.swift */; };
+		AA000000000000000000010A /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000205 /* Tokens.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -76,6 +78,7 @@
 		AA0000000000000000000202 /* LocationProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationProvider.swift; sourceTree = "<group>"; };
 		AA0000000000000000000203 /* FairnessRanker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FairnessRanker.swift; sourceTree = "<group>"; };
 		AA0000000000000000000204 /* TweenFriend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweenFriend.swift; sourceTree = "<group>"; };
+		AA0000000000000000000205 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -171,6 +174,7 @@
 				AA0000000000000000000202 /* LocationProvider.swift */,
 				AA0000000000000000000203 /* FairnessRanker.swift */,
 				AA0000000000000000000204 /* TweenFriend.swift */,
+				AA0000000000000000000205 /* Tokens.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -365,6 +369,7 @@
 				AA0000000000000000000102 /* LocationProvider.swift in Sources */,
 				AA0000000000000000000105 /* FairnessRanker.swift in Sources */,
 				AA0000000000000000000107 /* TweenFriend.swift in Sources */,
+				AA0000000000000000000109 /* Tokens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -393,6 +398,7 @@
 				AA0000000000000000000104 /* LocationProvider.swift in Sources */,
 				AA0000000000000000000106 /* FairnessRanker.swift in Sources */,
 				AA0000000000000000000108 /* TweenFriend.swift in Sources */,
+				AA000000000000000000010A /* Tokens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
