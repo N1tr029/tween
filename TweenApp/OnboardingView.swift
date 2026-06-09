@@ -37,6 +37,7 @@ struct OnboardingView: View {
     @State private var editorMode: FriendEditor?
     @State private var editorName: String = ""
     @State private var pendingShare: ShareIntent?
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -50,8 +51,8 @@ struct OnboardingView: View {
                     Spacer()
                     mapControls
                 }
-                .padding(.top, 74)
-                .padding(.horizontal, 16)
+                .padding(.top, Tokens.Space.s8 + Tokens.Space.s7 + 2)
+                .padding(.horizontal, Tokens.Space.s4)
                 Spacer()
             }
 
@@ -75,19 +76,26 @@ struct OnboardingView: View {
         Map(position: $position, bounds: MapCameraBounds(minimumDistance: 200, maximumDistance: 2_000_000)) {
                 if let coordinate = savedCoordinate {
                     Annotation("You", coordinate: coordinate) {
-                        mapDot(color: .blue, systemImage: "person.fill")
+                        TweenPin(role: .selfDot)
                     }
                 }
 
                 if let displayPeerCoordinate {
                     Annotation("Friend", coordinate: displayPeerCoordinate) {
-                        mapDot(color: .orange, systemImage: "person.2.fill")
+                        TweenPin(role: .friend)
                     }
                 }
 
                 if let savedCoordinate, let displayPeerCoordinate {
                     MapPolyline(coordinates: [savedCoordinate, displayPeerCoordinate])
-                        .stroke(.blue, style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [7, 7]))
+                        .stroke(Tokens.Palette.pinSelf, style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [7, 7]))
+                }
+
+                if let bestSpot = rankedSpots.first,
+                   let bestCoordinate = bestSpot.item.placemark.location?.coordinate {
+                    Annotation("Fair spot", coordinate: bestCoordinate) {
+                        TweenPin(role: .midpoint)
+                    }
                 }
 
                 ForEach(searchResults, id: \.self) { item in
@@ -189,12 +197,13 @@ struct OnboardingView: View {
     #endif
 
     private var searchBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Tokens.Space.s2) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             TextField("Search coffee, lunch, parks...", text: $searchText)
                 .textInputAutocapitalization(.never)
                 .submitLabel(.search)
+                .focused($searchFocused)
                 .onSubmit { searchPlaces() }
 
             if !searchText.isEmpty {
@@ -206,20 +215,20 @@ struct OnboardingView: View {
                     focusOnPeople()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, Tokens.Space.s3)
         .frame(height: 48)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .tweenGlass(cornerRadius: Tokens.Radius.chip)
+        .padding(.horizontal, Tokens.Space.s4)
+        .padding(.top, Tokens.Space.s3)
     }
 
     private var mapControls: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Space.s2) {
             Menu {
                 ForEach(MapDisplayMode.allCases) { mode in
                     Button {
@@ -230,7 +239,7 @@ struct OnboardingView: View {
                 }
             } label: {
                 Image(systemName: mapDisplayMode.systemImage)
-                    .font(.headline)
+                    .font(Tokens.Typography.headline)
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
@@ -240,10 +249,10 @@ struct OnboardingView: View {
                 setTrafficVisible(!showsTraffic)
             } label: {
                 Image(systemName: showsTraffic ? "car.fill" : "car")
-                    .font(.headline)
-                    .foregroundStyle(showsTraffic ? .white : .primary)
+                    .font(Tokens.Typography.headline)
+                    .foregroundStyle(showsTraffic ? .white : Tokens.Palette.onSurface)
                     .frame(width: 42, height: 42)
-                    .background(showsTraffic ? Color.blue : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .background(showsTraffic ? Tokens.Palette.brand : Color.clear, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(showsTraffic ? "Hide traffic" : "Show traffic")
@@ -253,27 +262,27 @@ struct OnboardingView: View {
 
             Button(action: resetMap) {
                 Image(systemName: "location.north.line.fill")
-                    .font(.headline)
+                    .font(Tokens.Typography.headline)
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Reset map")
         }
-        .padding(6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
-        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: mapDisplayMode)
-        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: showsTraffic)
+        .padding(Tokens.Space.s1 + 2)
+        .tweenGlass(cornerRadius: Tokens.Radius.card)
+        .tweenElevation(Tokens.Elevation.floating)
+        .animation(Tokens.Motion.snappy, value: mapDisplayMode)
+        .animation(Tokens.Motion.snappy, value: showsTraffic)
     }
 
     private var bottomPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
+            VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
                 dragHandle
                     .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(Tokens.Motion.spring) {
-                            panelDetent = panelDetent == .peek ? .compact : panelDetent
+                            panelDetent = panelDetent == .peek ? .medium : panelDetent
                         }
                     }
 
@@ -281,19 +290,19 @@ struct OnboardingView: View {
                     peekIdentity
                 } else {
                     HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: Tokens.Space.s1) {
                             Text("Tween")
-                                .font(.largeTitle.bold())
+                                .font(Tokens.Typography.display)
                             Text(headlineText)
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
+                                .font(Tokens.Typography.headline)
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                         }
 
                         Spacer()
 
                         Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(savedCoordinate == nil ? Color.secondary : Color.green)
+                            .font(Tokens.Typography.title)
+                            .foregroundStyle(savedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.success)
                     }
 
                     Picker("View", selection: $panelTab) {
@@ -313,11 +322,13 @@ struct OnboardingView: View {
                             placeResultsList
                         } else if let searchError {
                             Label(searchError, systemImage: "exclamationmark.triangle.fill")
-                                .font(.subheadline)
-                                .foregroundStyle(.orange)
+                                .font(Tokens.Typography.callout)
+                                .foregroundStyle(Tokens.Palette.warning)
+                        } else {
+                            categoryChipRow
                         }
-                    case .group:
-                        groupTab
+                    case .waiting:
+                        waitingTab
                     }
 
                     if panelDetent != .full, panelTab == .map {
@@ -325,12 +336,20 @@ struct OnboardingView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, searchResults.isEmpty ? 20 : 10)
-            .padding(.bottom, searchResults.isEmpty ? 34 : 24)
+            .padding(.horizontal, Tokens.Space.s5)
+            .padding(.top, searchResults.isEmpty ? Tokens.Space.s5 : Tokens.Space.s3 - 2)
+            .padding(.bottom, searchResults.isEmpty ? Tokens.Space.s7 + 2 : Tokens.Space.s6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: panelHeight, alignment: .top)
-            .background(.regularMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24))
+            .background {
+                UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
+                    .fill(.regularMaterial)
+                    .overlay {
+                        UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
+                            .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+                    }
+            }
+            .tweenElevation(Tokens.Elevation.sheet)
             .gesture(panelDragGesture)
             .animation(Tokens.Motion.spring, value: panelDetent)
             .alert(
@@ -368,7 +387,7 @@ struct OnboardingView: View {
 
     private var dragHandle: some View {
         Capsule()
-            .fill(Color.secondary.opacity(0.35))
+            .fill(Tokens.Palette.onSurfaceMuted.opacity(0.35))
             .frame(width: 42, height: 5)
             .frame(maxWidth: .infinity)
             .padding(.bottom, 2)
@@ -376,8 +395,8 @@ struct OnboardingView: View {
 
     private var peekIdentity: some View {
         Text("Tween")
-            .font(.headline)
-            .foregroundStyle(.secondary)
+            .font(Tokens.Typography.headline)
+            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             .frame(maxWidth: .infinity, alignment: .center)
     }
 
@@ -394,19 +413,15 @@ struct OnboardingView: View {
             }
     }
 
-    private static let peekHeight: CGFloat = 60
+    private static let peekHeight: CGFloat = 120
 
     private var panelHeight: CGFloat? {
-        if panelDetent == .peek { return Self.peekHeight }
-        guard !searchResults.isEmpty || panelTab == .group else { return nil }
         let screenHeight = UIScreen.main.bounds.height
         switch panelDetent {
         case .peek:
             return Self.peekHeight
-        case .compact:
-            return panelTab == .group ? 360 : 238
         case .medium:
-            return panelTab == .group ? min(500, screenHeight * 0.56) : min(430, screenHeight * 0.48)
+            return screenHeight * 0.45
         case .full:
             return screenHeight - 92
         }
@@ -414,76 +429,112 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var actionControls: some View {
-        if savedCoordinate == nil {
-            HStack(spacing: 10) {
-                Image(systemName: "message.fill")
-                    .foregroundStyle(.blue)
-                Text("Waiting for an iMessage “I'm in”")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        } else {
-            HStack(spacing: 10) {
-                Button { pendingShare = .update } label: {
-                    HStack {
-                        if isRequesting {
-                            ProgressView()
-                                .tint(.white)
-                        }
-                        Text(buttonTitle)
-                            .font(.headline)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
-                .disabled(isRequesting)
+        VStack(spacing: Tokens.Space.s2) {
+            primaryCTA
 
+            if savedCoordinate != nil {
                 Button(action: leaveTween) {
                     Text("No longer in")
-                        .font(.headline)
-                        .foregroundStyle(.red)
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
-                .tint(.red)
+                .buttonStyle(.tweenSubtle)
                 .disabled(isRequesting)
             }
         }
     }
 
+    @ViewBuilder
+    private var primaryCTA: some View {
+        if savedCoordinate == nil {
+            HStack(spacing: Tokens.Space.s2 + 2) {
+                Image(systemName: "message.fill")
+                    .foregroundStyle(Tokens.Palette.pinSelf)
+                Text("Waiting for an iMessage “I'm in”")
+                    .font(Tokens.Typography.headline)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        } else if peerCoordinate == nil {
+            Button { pendingShare = .update } label: {
+                HStack {
+                    if isRequesting {
+                        ProgressView().tint(.white)
+                    }
+                    Text("Share your location")
+                }
+            }
+            .buttonStyle(.tweenPrimary)
+            .disabled(isRequesting)
+        } else {
+            Button {
+                withAnimation(Tokens.Motion.spring) {
+                    panelDetent = .medium
+                }
+                searchFocused = true
+            } label: {
+                HStack {
+                    Image(systemName: "sparkles")
+                    Text("Find the fair spot")
+                }
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+    }
+
+    private var categoryChipRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Tokens.Space.s2) {
+                ForEach(CategoryPreset.allCases) { preset in
+                    Button {
+                        searchText = preset.query
+                        searchFocused = true
+                    } label: {
+                        HStack(spacing: Tokens.Space.s1 + 2) {
+                            Image(systemName: preset.systemImage)
+                            Text(preset.label)
+                        }
+                        .font(Tokens.Typography.callout.weight(.semibold))
+                        .foregroundStyle(Tokens.Palette.onSurface)
+                        .padding(.horizontal, Tokens.Space.s3)
+                        .padding(.vertical, Tokens.Space.s2)
+                        .background(Tokens.Palette.surface, in: Capsule())
+                        .overlay {
+                            Capsule().stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var placeResultsList: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Tokens.Space.s2 + 2) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Places")
-                        .font(.title3.weight(.bold))
+                        .font(Tokens.Typography.title)
                     Text(resultsSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 }
 
                 Spacer()
 
                 Text("\(searchResults.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .frame(minWidth: 26, minHeight: 26)
-                    .background(Color.secondary.opacity(0.12), in: Circle())
+                    .background(Tokens.Palette.onSurfaceMuted.opacity(0.12), in: Circle())
             }
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 12) {
+                VStack(spacing: Tokens.Space.s3) {
                     ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
                         placeResultRow(item: item, index: index)
                     }
@@ -493,91 +544,83 @@ struct OnboardingView: View {
         }
     }
 
-    private var groupTab: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var waitingTab: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s3) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Group")
-                        .font(.title3.weight(.bold))
-                    Text(groupSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("Waiting")
+                        .font(Tokens.Typography.title)
+                    Text(waitingSubtitle)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 }
                 Spacer()
 
                 if !friends.isEmpty {
                     Text("\(friends.count)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
+                        .font(Tokens.Typography.captionEmphasized)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                         .frame(minWidth: 26, minHeight: 26)
-                        .background(Color.secondary.opacity(0.12), in: Circle())
+                        .background(Tokens.Palette.onSurfaceMuted.opacity(0.12), in: Circle())
                 }
 
                 Button(action: beginAdd) {
                     Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
+                        .font(Tokens.Typography.callout.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(width: 28, height: 28)
-                        .background(Color.blue, in: Circle())
+                        .background(Tokens.Palette.brand, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Add friend")
+                .accessibilityLabel("Add person to wait on")
             }
 
             if friends.isEmpty {
-                groupEmptyState
+                waitingEmptyState
             } else {
                 friendList
                 Button(action: imInForGroup) {
                     HStack {
                         if isRequesting { ProgressView().tint(.white) }
-                        Text(savedCoordinate == nil ? "Share location & say I'm in" : "I'm in for this group")
-                            .font(.headline)
+                        Text(savedCoordinate == nil ? "Share my location" : "I'm in")
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
                 }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .buttonStyle(.tweenPrimary)
                 .disabled(isRequesting)
             }
         }
     }
 
-    private var groupEmptyState: some View {
-        VStack(spacing: 12) {
+    private var waitingEmptyState: some View {
+        VStack(spacing: Tokens.Space.s3) {
             Image(systemName: "person.2.badge.plus")
                 .font(.system(size: 42, weight: .regular))
-                .foregroundStyle(.secondary)
-            Text("Add the friends you want to meet up with.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            Text("Add someone you're waiting on a reply from.")
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 .multilineTextAlignment(.center)
             Button(action: beginAdd) {
-                Text("Add friend")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
+                Text("Add person")
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.roundedRectangle(radius: 8))
+            .buttonStyle(.tweenPrimary)
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, Tokens.Space.s4 + 2)
         .frame(maxWidth: .infinity)
     }
 
     private var friendList: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Tokens.Space.s2) {
             ForEach(friends) { friend in
-                HStack(spacing: 10) {
+                HStack(spacing: Tokens.Space.s2 + 2) {
                     Text(initials(for: friend))
-                        .font(.caption.weight(.bold))
+                        .font(Tokens.Typography.captionEmphasized)
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
                         .background(color(for: friend), in: Circle())
 
                     Text(friend.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Tokens.Typography.callout.weight(.semibold))
 
                     Spacer()
 
@@ -586,23 +629,23 @@ struct OnboardingView: View {
                         Button("Delete", role: .destructive) { deleteFriend(friend) }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.secondary)
+                            .font(Tokens.Typography.callout.weight(.bold))
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                             .frame(width: 32, height: 32)
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Manage \(friend.name)")
                 }
-                .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .padding(Tokens.Space.s2 + 2)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2))
             }
         }
     }
 
-    private var groupSubtitle: String {
-        if friends.isEmpty { return "Add your set friends to start" }
-        if savedCoordinate == nil { return "Share your dot, then say I'm in" }
-        if peerCoordinate == nil { return "Your dot is active, waiting for friends" }
+    private var waitingSubtitle: String {
+        if friends.isEmpty { return "Add the people you're waiting on" }
+        if savedCoordinate == nil { return "Share your location to start" }
+        if peerCoordinate == nil { return "Waiting on a reply" }
         return "You and a friend are \(distanceText) apart"
     }
 
@@ -616,177 +659,27 @@ struct OnboardingView: View {
         switch panelDetent {
         case .peek:
             return 0
-        case .compact:
-            return 176
         case .medium:
-            return 360
+            return 280
         case .full:
             return UIScreen.main.bounds.height - 230
         }
     }
 
     private func placeResultRow(item: MKMapItem, index: Int) -> some View {
-        let isSelected = item == selectedPlace
-
-        return
-            VStack(alignment: .leading, spacing: 12) {
-                ZStack(alignment: .topLeading) {
-                    PlacePreviewCarousel(coordinate: item.placemark.location?.coordinate)
-                        .frame(height: panelDetent == .compact ? 118 : 150)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                    HStack(spacing: 8) {
-                        Image(systemName: placeIcon(for: item))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 28, height: 28)
-                            .background(placeColor(for: item), in: Circle())
-                            .overlay {
-                                Circle().stroke(.white, lineWidth: 2)
-                            }
-
-                        Text(placeTypeLabel(for: item))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 9)
-                            .frame(height: 28)
-                            .background(.black.opacity(0.42), in: Capsule())
-                    }
-                    .padding(10)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(item.name ?? "Place")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        Spacer(minLength: 0)
-
-                        Text("\(index + 1)")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(isSelected ? .white : .secondary)
-                            .frame(width: 28, height: 28)
-                            .background(isSelected ? Color.blue : Color.secondary.opacity(0.15), in: Circle())
-                    }
-
-                    Text(item.placemark.title ?? "Nearby")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-
-                    if let ranked = rankedSpot(for: item) {
-                        HStack(spacing: 8) {
-                            fairnessBadge(for: ranked)
-                            Text(fairnessSummary(for: ranked, index: index))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.78)
-                        }
-
-                        LazyVGrid(columns: metricColumns, spacing: 8) {
-                            personMetric(title: "You", value: formatETA(ranked.etaFromA), color: .blue)
-                            personMetric(title: "Friend", value: formatETA(ranked.etaFromB), color: .orange)
-                            personMetric(title: "Gap", value: formatETA(ranked.fairnessGap), color: fairnessColor(for: ranked))
-                        }
-                    } else {
-                        LazyVGrid(columns: metricColumns, spacing: 8) {
-                            personMetric(title: "You", value: distanceFrom(savedCoordinate, to: item) ?? "--", color: .blue)
-                            personMetric(title: "Friend", value: distanceFrom(peerCoordinate, to: item) ?? "--", color: .orange)
-                            personMetric(title: "Middle", value: distanceFrom(midpointCoordinate, to: item) ?? "--", color: .green)
-                        }
-                    }
-
-                    Button {
-                        selectPlaceOnMap(item)
-                    } label: {
-                        HStack(spacing: 7) {
-                            Image(systemName: "scope")
-                            Text(isSelected ? "Showing on map" : "Show on map")
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.bold))
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(isSelected ? .white : .blue)
-                        .padding(.horizontal, 12)
-                        .frame(height: 40)
-                        .background(isSelected ? Color.blue : Color.blue.opacity(0.11), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.opacity(isSelected ? 0.92 : 0.78), in: RoundedRectangle(cornerRadius: 14))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(isSelected ? Color.blue.opacity(0.55) : Color.secondary.opacity(0.12), lineWidth: isSelected ? 1.5 : 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var metricColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 82), spacing: 8), count: 3)
-    }
-
-    private func personMetric(title: String, value: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .foregroundStyle(.primary)
-        }
-        .font(.caption2.weight(.semibold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
-    }
-
-    private func fairnessBadge(for ranked: RankedSpot) -> some View {
-        Text("\(fairnessScore(for: ranked)) fair")
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(fairnessColor(for: ranked))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(fairnessColor(for: ranked).opacity(0.14), in: Capsule())
-    }
-
-    private func fairnessSummary(for ranked: RankedSpot, index: Int) -> String {
-        let worse = formatETA(ranked.worseETA)
-        let gap = formatETA(ranked.fairnessGap)
-        if index == 0 {
-            return "Best balance · longest trip \(worse) · split gap \(gap)"
-        }
-        return "Longest trip \(worse) · split gap \(gap)"
-    }
-
-    private func fairnessScore(for ranked: RankedSpot) -> Int {
-        let gapMinutes = ranked.fairnessGap / 60
-        let worseMinutes = max(ranked.worseETA / 60, 1)
-        let balancePenalty = min(45, (gapMinutes / worseMinutes) * 45)
-        let longTripPenalty = min(25, worseMinutes / 3)
-        let confidenceBonus = ranked.confidence * 8
-        return max(1, min(100, Int((100 - balancePenalty - longTripPenalty + confidenceBonus).rounded())))
-    }
-
-    private func fairnessColor(for ranked: RankedSpot) -> Color {
-        switch fairnessScore(for: ranked) {
-        case 82...:
-            return .green
-        case 60..<82:
-            return .orange
-        default:
-            return .red
-        }
+        ResultRow(
+            item: item,
+            ranked: rankedSpot(for: item),
+            isSelected: item == selectedPlace,
+            isTopPick: index == 0 && rankedSpot(for: item) != nil,
+            symbol: placeIcon(for: item),
+            categoryTint: placeColor(for: item),
+            typeLabel: placeTypeLabel(for: item),
+            youDistance: distanceFrom(savedCoordinate, to: item),
+            friendDistance: distanceFrom(peerCoordinate, to: item)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .onTapGesture { selectPlaceOnMap(item) }
     }
 
     @ViewBuilder
@@ -798,7 +691,7 @@ struct OnboardingView: View {
                     formatCoordinate(latitude: savedCoordinate.latitude, longitude: savedCoordinate.longitude),
                     systemImage: "location.fill"
                 )
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             }
         case .requesting:
             ProgressView("Getting your location…")
@@ -807,14 +700,14 @@ struct OnboardingView: View {
                 formatCoordinate(latitude: coordinate.latitude, longitude: coordinate.longitude),
                 systemImage: "checkmark.circle.fill"
             )
-            .foregroundStyle(.green)
+            .foregroundStyle(Tokens.Palette.success)
         case .denied:
             Label("Location access denied. Enable it in Settings to share your spot.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.Palette.warning)
                 .multilineTextAlignment(.center)
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(Tokens.Palette.warning)
                 .multilineTextAlignment(.center)
         }
     }
@@ -945,7 +838,7 @@ struct OnboardingView: View {
 
     private func setMapDisplayMode(_ mode: MapDisplayMode) {
         let preservedRegion = lastVisibleRegion
-        withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) {
+        withAnimation(Tokens.Motion.snappy) {
             mapDisplayMode = mode
         }
         restoreCamera(after: preservedRegion, refocusPlacesIfNeeded: true)
@@ -953,7 +846,7 @@ struct OnboardingView: View {
 
     private func setTrafficVisible(_ isVisible: Bool) {
         let preservedRegion = lastVisibleRegion
-        withAnimation(.spring(response: 0.18, dampingFraction: 0.9)) {
+        withAnimation(Tokens.Motion.snappy) {
             showsTraffic = isVisible
         }
         restoreCamera(after: preservedRegion, refocusPlacesIfNeeded: true)
@@ -1049,7 +942,7 @@ struct OnboardingView: View {
     private func focusOnPeople() {
         let coordinates = [savedCoordinate, displayPeerCoordinate].compactMap { $0 }
         guard let region = framedRegion(for: coordinates) else { return }
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+        withAnimation(Tokens.Motion.spring) {
             position = .region(region)
         }
     }
@@ -1115,7 +1008,7 @@ struct OnboardingView: View {
             position = .region(region)
             return
         }
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+        withAnimation(Tokens.Motion.spring) {
             position = .region(region)
         }
     }
@@ -1170,10 +1063,9 @@ struct OnboardingView: View {
     /// bigger shift.
     private var sheetBottomInsetFraction: Double {
         switch panelDetent {
-        case .peek:    0
-        case .compact: 0.13
-        case .medium:  0.24
-        case .full:    0.32
+        case .peek:   0
+        case .medium: 0.20
+        case .full:   0.32
         }
     }
 
@@ -1196,27 +1088,6 @@ struct OnboardingView: View {
         default:
             return false
         }
-    }
-
-    private func mapDot(color: Color, systemImage: String) -> some View {
-        ZStack {
-            Circle()
-                .fill(color.opacity(0.18))
-                .frame(width: 48, height: 48)
-            Circle()
-                .fill(color)
-                .frame(width: 28, height: 28)
-                .overlay {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .overlay {
-                    Circle()
-                        .stroke(.white, lineWidth: 4)
-                }
-        }
-        .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
     }
 
     private func placeDot(item: MKMapItem) -> some View {
@@ -1371,21 +1242,21 @@ private enum MapDisplayMode: String, CaseIterable, Identifiable {
 
 private enum HomePanelTab: String, CaseIterable, Identifiable {
     case map
-    case group
+    case waiting
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .map: "Map"
-        case .group: "Group"
+        case .waiting: "Waiting"
         }
     }
 
     var systemImage: String {
         switch self {
         case .map: "map"
-        case .group: "person.2.fill"
+        case .waiting: "hourglass"
         }
     }
 }
@@ -1395,6 +1266,50 @@ private enum ShareIntent: Identifiable {
     case update
 
     var id: String { String(describing: self) }
+}
+
+/// Google-Maps-style category presets. Phase-2 scope is UI-only — tapping a chip pre-fills
+/// the search field but does not trigger `searchPlaces()`. Wiring lands in a later slice.
+private enum CategoryPreset: String, CaseIterable, Identifiable {
+    case coffee, food, drinks, gas, parks, movies, fitness
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .coffee:  return "Coffee"
+        case .food:    return "Food"
+        case .drinks:  return "Drinks"
+        case .gas:     return "Gas"
+        case .parks:   return "Parks"
+        case .movies:  return "Movies"
+        case .fitness: return "Fitness"
+        }
+    }
+
+    var query: String {
+        switch self {
+        case .coffee:  return "coffee"
+        case .food:    return "restaurant"
+        case .drinks:  return "bar"
+        case .gas:     return "gas station"
+        case .parks:   return "park"
+        case .movies:  return "movie theater"
+        case .fitness: return "gym"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .coffee:  return "cup.and.saucer.fill"
+        case .food:    return "fork.knife"
+        case .drinks:  return "wineglass.fill"
+        case .gas:     return "fuelpump.fill"
+        case .parks:   return "tree.fill"
+        case .movies:  return "film.fill"
+        case .fitness: return "figure.run"
+        }
+    }
 }
 
 private enum FriendEditor: Identifiable {
@@ -1418,14 +1333,12 @@ private enum FriendEditor: Identifiable {
 
 private enum PanelDetent {
     case peek
-    case compact
     case medium
     case full
 
     var nextHigher: PanelDetent {
         switch self {
-        case .peek: .compact
-        case .compact: .medium
+        case .peek: .medium
         case .medium: .full
         case .full: .full
         }
@@ -1434,106 +1347,119 @@ private enum PanelDetent {
     var nextLower: PanelDetent {
         switch self {
         case .peek: .peek
-        case .compact: .peek
-        case .medium: .compact
+        case .medium: .peek
         case .full: .medium
         }
     }
 }
 
-private struct PlacePreviewCarousel: View {
-    let coordinate: CLLocationCoordinate2D?
+/// Simplified search-result row: category symbol pill, name, type label, dual-ETA chip.
+/// The whole row is tappable (handled by the caller); selection state shifts to a
+/// brand-tinted background + thin brand border.
+private struct ResultRow: View {
+    let item: MKMapItem
+    let ranked: RankedSpot?
+    let isSelected: Bool
+    let isTopPick: Bool
+    let symbol: String
+    let categoryTint: Color
+    let typeLabel: String
+    let youDistance: String?
+    let friendDistance: String?
 
     var body: some View {
-        TabView {
-            ForEach(PlacePreviewVariant.allCases) { variant in
-                PlaceThumbnailView(coordinate: coordinate, variant: variant)
+        HStack(alignment: .center, spacing: Tokens.Space.s3) {
+            ZStack {
+                Circle()
+                    .fill(isTopPick ? Tokens.Palette.brand : categoryTint)
+                Image(systemName: symbol)
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(.white)
             }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .automatic))
-        .indexViewStyle(.page(backgroundDisplayMode: .always))
-    }
-}
+            .frame(width: 36, height: 36)
 
-private enum PlacePreviewVariant: String, CaseIterable, Identifiable {
-    case street
-    case satellite
-    case area
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name ?? "Place")
+                    .font(Tokens.Typography.headline)
+                    .foregroundStyle(Tokens.Palette.onSurface)
+                    .lineLimit(1)
+                Text(typeLabel)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .lineLimit(1)
+            }
 
-    var id: String { rawValue }
+            Spacer(minLength: Tokens.Space.s2)
 
-    var mapType: MKMapType {
-        switch self {
-        case .street:
-            return .standard
-        case .satellite:
-            return .hybrid
-        case .area:
-            return .mutedStandard
-        }
-    }
-
-    var span: MKCoordinateSpan {
-        switch self {
-        case .street:
-            return MKCoordinateSpan(latitudeDelta: 0.0035, longitudeDelta: 0.0035)
-        case .satellite:
-            return MKCoordinateSpan(latitudeDelta: 0.0025, longitudeDelta: 0.0025)
-        case .area:
-            return MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
-        }
-    }
-}
-
-private struct PlaceThumbnailView: View {
-    let coordinate: CLLocationCoordinate2D?
-    let variant: PlacePreviewVariant
-    @State private var image: UIImage?
-
-    var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                LinearGradient(
-                    colors: [.secondary.opacity(0.16), .secondary.opacity(0.04)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+            if let ranked {
+                ETAChip(
+                    selfValue: formatETA(ranked.etaFromA),
+                    friendValue: formatETA(ranked.etaFromB),
+                    isBalanced: isBalanced(ranked)
                 )
-                Image(systemName: "map.fill")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+            } else {
+                ETAChip(
+                    selfValue: youDistance ?? "—",
+                    friendValue: friendDistance ?? "—",
+                    isBalanced: false
+                )
             }
         }
-        .clipped()
-        .task(id: thumbnailKey) {
-            image = await makeThumbnail()
+        .padding(.horizontal, Tokens.Space.s3)
+        .padding(.vertical, Tokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .fill(isSelected ? Tokens.Palette.brandMuted : Tokens.Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .stroke(
+                    isSelected ? Tokens.Palette.brand.opacity(0.55) : Tokens.Palette.glassStroke,
+                    lineWidth: isSelected ? 1.5 : 1
+                )
         }
     }
 
-    private var thumbnailKey: String {
-        let coordinateKey = coordinate.map { formatCoordinate(latitude: $0.latitude, longitude: $0.longitude) } ?? "nil"
-        return "\(coordinateKey)-\(variant.rawValue)"
+    private func formatETA(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        return "\(minutes)m"
     }
 
-    private func makeThumbnail() async -> UIImage? {
-        guard let coordinate else { return nil }
-        let options = MKMapSnapshotter.Options()
-        options.size = CGSize(width: 640, height: 320)
-        options.scale = UIScreen.main.scale
-        options.mapType = variant.mapType
-        options.region = MKCoordinateRegion(
-            center: coordinate,
-            span: variant.span
-        )
+    private func isBalanced(_ spot: RankedSpot) -> Bool {
+        spot.fairnessGap < 0.2 * max(spot.worseETA, 1)
+    }
+}
 
-        do {
-            let snapshot = try await MKMapSnapshotter(options: options).start()
-            return snapshot.image
-        } catch {
-            return nil
+/// Dual-pill capsule showing the self ETA and the friend ETA. Tinted with the brand-muted
+/// background when the row is balanced — the signal that this spot is a fair midpoint.
+private struct ETAChip: View {
+    let selfValue: String
+    let friendValue: String
+    let isBalanced: Bool
+
+    var body: some View {
+        HStack(spacing: Tokens.Space.s1 + 2) {
+            etaPill(value: selfValue, color: Tokens.Palette.pinSelf)
+            etaPill(value: friendValue, color: Tokens.Palette.pinFriend)
+        }
+        .padding(.horizontal, Tokens.Space.s1 + 2)
+        .padding(.vertical, Tokens.Space.s1)
+        .background {
+            Capsule()
+                .fill(isBalanced ? Tokens.Palette.brandMuted : Color.clear)
+        }
+    }
+
+    private func etaPill(value: String, color: Color) -> some View {
+        HStack(spacing: Tokens.Space.s1) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(value)
+                .font(Tokens.Typography.captionEmphasized)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .lineLimit(1)
         }
     }
 }
