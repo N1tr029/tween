@@ -29,6 +29,9 @@ struct OnboardingView: View {
     )
     @State private var mapDisplayMode: MapDisplayMode = .standard
     @State private var showsTraffic = false
+    @State private var friends: [TweenFriend] = FriendRoster.load()
+    @State private var editorMode: FriendEditor?
+    @State private var editorName: String = ""
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -317,6 +320,21 @@ struct OnboardingView: View {
             .background(.regularMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24))
             .gesture(panelDragGesture)
             .animation(.spring(response: 0.24, dampingFraction: 0.9), value: panelDetent)
+            .alert(
+                editorMode?.alertTitle ?? "",
+                isPresented: Binding(
+                    get: { editorMode != nil },
+                    set: { if !$0 { editorMode = nil } }
+                )
+            ) {
+                TextField("Name", text: $editorName)
+                    .textInputAutocapitalization(.words)
+                Button("Save", action: saveEditor)
+                    .disabled(editorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Cancel", role: .cancel) { editorMode = nil }
+            } message: {
+                Text("Use a name you'll recognize.")
+            }
         }
     }
 
@@ -447,58 +465,105 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("\(TweenFriend.defaultFriends.count)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 26, minHeight: 26)
-                    .background(Color.secondary.opacity(0.12), in: Circle())
+
+                if !friends.isEmpty {
+                    Text("\(friends.count)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 26, minHeight: 26)
+                        .background(Color.secondary.opacity(0.12), in: Circle())
+                }
+
+                Button(action: beginAdd) {
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color.blue, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add friend")
             }
 
-            VStack(spacing: 8) {
-                ForEach(TweenFriend.defaultFriends) { friend in
-                    HStack(spacing: 10) {
-                        Text(friend.initials)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 34, height: 34)
-                            .background(friend.color, in: Circle())
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(friend.name)
-                                .font(.subheadline.weight(.semibold))
-                            Text(friend.status)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Image(systemName: friend.isIn ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(friend.isIn ? .green : .secondary)
+            if friends.isEmpty {
+                groupEmptyState
+            } else {
+                friendList
+                Button(action: imInForGroup) {
+                    HStack {
+                        if isRequesting { ProgressView().tint(.white) }
+                        Text(savedCoordinate == nil ? "Share location & say I'm in" : "I'm in for this group")
+                            .font(.headline)
                     }
-                    .padding(10)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
                 }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .disabled(isRequesting)
             }
+        }
+    }
 
-            Button(action: imInForGroup) {
-                HStack {
-                    if isRequesting { ProgressView().tint(.white) }
-                    Text(savedCoordinate == nil ? "Share location & say I'm in" : "I'm in for this group")
-                        .font(.headline)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
+    private var groupEmptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "person.2.badge.plus")
+                .font(.system(size: 42, weight: .regular))
+                .foregroundStyle(.secondary)
+            Text("Add the friends you want to meet up with.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button(action: beginAdd) {
+                Text("Add friend")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
             }
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.roundedRectangle(radius: 8))
-            .disabled(isRequesting)
+        }
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var friendList: some View {
+        VStack(spacing: 8) {
+            ForEach(friends) { friend in
+                HStack(spacing: 10) {
+                    Text(initials(for: friend))
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(color(for: friend), in: Circle())
+
+                    Text(friend.name)
+                        .font(.subheadline.weight(.semibold))
+
+                    Spacer()
+
+                    Menu {
+                        Button("Rename") { beginRename(friend) }
+                        Button("Delete", role: .destructive) { deleteFriend(friend) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Manage \(friend.name)")
+                }
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            }
         }
     }
 
     private var groupSubtitle: String {
-        if savedCoordinate == nil { return "Share your real dot with your set friends" }
-        if peerCoordinate == nil { return "Your dot is active; waiting for friends" }
+        if friends.isEmpty { return "Add your set friends to start" }
+        if savedCoordinate == nil { return "Share your dot, then say I'm in" }
+        if peerCoordinate == nil { return "Your dot is active, waiting for friends" }
         return "You and a friend are \(distanceText) apart"
     }
 
@@ -770,6 +835,50 @@ struct OnboardingView: View {
         updateMyDot()
     }
 
+    private func beginAdd() {
+        editorName = ""
+        editorMode = .add
+    }
+
+    private func beginRename(_ friend: TweenFriend) {
+        editorName = friend.name
+        editorMode = .rename(friend)
+    }
+
+    private func saveEditor() {
+        let trimmed = editorName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let mode = editorMode else { return }
+        switch mode {
+        case .add:
+            friends.append(TweenFriend(name: trimmed))
+        case .rename(let target):
+            if let index = friends.firstIndex(where: { $0.id == target.id }) {
+                friends[index].name = trimmed
+            }
+        }
+        FriendRoster.save(friends)
+        editorMode = nil
+    }
+
+    private func deleteFriend(_ friend: TweenFriend) {
+        friends.removeAll { $0.id == friend.id }
+        FriendRoster.save(friends)
+    }
+
+    private func initials(for friend: TweenFriend) -> String {
+        let words = friend.name
+            .split(whereSeparator: { $0.isWhitespace })
+            .prefix(2)
+        let letters = words.compactMap { $0.first }.map(String.init).joined()
+        return letters.isEmpty ? "?" : letters.uppercased()
+    }
+
+    private func color(for friend: TweenFriend) -> Color {
+        let palette: [Color] = [.blue, .orange, .green, .purple, .pink, .teal]
+        let bucket = abs(friend.id.uuidString.hashValue) % palette.count
+        return palette[bucket]
+    }
+
     private func selectPlaceOnMap(_ item: MKMapItem) {
         selectedPlace = item
         if let coordinate = item.placemark.location?.coordinate {
@@ -837,6 +946,7 @@ struct OnboardingView: View {
     }
 
     private func refreshSavedLocation(forceFocus: Bool = false) {
+        friends = FriendRoster.load()
         let latestSaved = LocationCache.load()
         let latestPeer = LocationCache.loadPeer()
         let peerJustAppeared = peerCoordinate == nil && latestPeer != nil
@@ -1218,19 +1328,23 @@ private enum HomePanelTab: String, CaseIterable, Identifiable {
     }
 }
 
-private struct TweenFriend: Identifiable {
-    let id = UUID()
-    let name: String
-    let initials: String
-    let status: String
-    let isIn: Bool
-    let color: Color
+private enum FriendEditor: Identifiable {
+    case add
+    case rename(TweenFriend)
 
-    static let defaultFriends: [TweenFriend] = [
-        TweenFriend(name: "Maya", initials: "M", status: "Set friend", isIn: true, color: .blue),
-        TweenFriend(name: "Jordan", initials: "J", status: "Waiting for I'm in", isIn: false, color: .orange),
-        TweenFriend(name: "Sam", initials: "S", status: "Available", isIn: false, color: .green),
-    ]
+    var id: String {
+        switch self {
+        case .add: "add"
+        case .rename(let friend): friend.id.uuidString
+        }
+    }
+
+    var alertTitle: String {
+        switch self {
+        case .add: "Add friend"
+        case .rename: "Rename friend"
+        }
+    }
 }
 
 private enum PanelDetent {
