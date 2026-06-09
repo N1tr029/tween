@@ -30,7 +30,7 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Map(position: $position) {
+            Map(position: $position, bounds: MapCameraBounds(minimumDistance: 200, maximumDistance: 2_000_000)) {
                 if let coordinate = savedCoordinate {
                     Annotation("You", coordinate: coordinate) {
                         mapDot(color: .blue, systemImage: "person.fill")
@@ -570,11 +570,7 @@ struct OnboardingView: View {
 
     private func focusOnPeople() {
         let coordinates = [savedCoordinate, displayPeerCoordinate].compactMap { $0 }
-        guard let region = region(containing: coordinates, padding: 1.8, minimumDelta: 0.018) else {
-            if let savedCoordinate { centerMap(on: savedCoordinate) }
-            else if let peerCoordinate { centerMap(on: peerCoordinate) }
-            return
-        }
+        guard let region = framedRegion(for: coordinates) else { return }
         withAnimation(.easeInOut(duration: 0.45)) {
             position = .region(region)
         }
@@ -636,8 +632,7 @@ struct OnboardingView: View {
     private func focusOnPlacesAndPeople() {
         var coordinates = [savedCoordinate, displayPeerCoordinate].compactMap { $0 }
         coordinates.append(contentsOf: searchResults.compactMap { $0.placemark.location?.coordinate })
-        guard var region = region(containing: coordinates, padding: 1.8, minimumDelta: 0.025) else { return }
-        region.center.latitude -= region.span.latitudeDelta * 0.24
+        guard let region = framedRegion(for: coordinates, paddingFactor: 0.4, minimumDelta: 0.025) else { return }
         withAnimation(.easeInOut(duration: 0.45)) {
             position = .region(region)
         }
@@ -664,6 +659,39 @@ struct OnboardingView: View {
                 longitudeDelta: max((maxLongitude - minLongitude) * padding, minimumDelta)
             )
         )
+    }
+
+    /// Camera-framing: union the coordinates into an MKMapRect, expand uniformly so no pin
+    /// sits on the edge, then shift the center upward by a fraction of the latitude span so
+    /// content stays clear of the draggable bottom panel.
+    private func framedRegion(
+        for coordinates: [CLLocationCoordinate2D],
+        paddingFactor: Double = 0.5,
+        minimumDelta: CLLocationDegrees = 0.015
+    ) -> MKCoordinateRegion? {
+        guard let first = coordinates.first else { return nil }
+        var rect = MKMapRect(origin: MKMapPoint(first), size: MKMapSize(width: 0, height: 0))
+        for coordinate in coordinates.dropFirst() {
+            rect = rect.union(MKMapRect(origin: MKMapPoint(coordinate), size: MKMapSize(width: 0, height: 0)))
+        }
+        let inset = -max(rect.size.width, rect.size.height) * paddingFactor
+        rect = rect.insetBy(dx: inset, dy: inset)
+        var region = MKCoordinateRegion(rect)
+        region.span.latitudeDelta = max(region.span.latitudeDelta, minimumDelta)
+        region.span.longitudeDelta = max(region.span.longitudeDelta, minimumDelta)
+        region.center.latitude -= region.span.latitudeDelta * sheetBottomInsetFraction
+        return region
+    }
+
+    /// Fraction of the framed region's latitude span the center shifts upward by, so the
+    /// content stays above the bottom panel. Adapts to the panel detent — bigger sheet,
+    /// bigger shift.
+    private var sheetBottomInsetFraction: Double {
+        switch panelDetent {
+        case .compact: 0.13
+        case .medium:  0.24
+        case .full:    0.32
+        }
     }
 
     private func distanceFrom(_ coordinate: CLLocationCoordinate2D?, to item: MKMapItem) -> String? {
