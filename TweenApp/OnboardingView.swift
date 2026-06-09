@@ -22,8 +22,12 @@ struct OnboardingView: View {
     @State private var searchError: String?
     @State private var panelDetent: PanelDetent = .medium
     @State private var panelTab: HomePanelTab = .map
-    @State private var position = MapCameraPosition.automatic
-    @State private var lastVisibleRegion = MKCoordinateRegion(
+    @State private var position = MapCameraPosition.region(OnboardingView.defaultFramedRegion)
+    @State private var lastVisibleRegion = OnboardingView.defaultFramedRegion
+
+    /// The country-level fallback region used on a fresh launch (no cached coordinate)
+    /// and as the seed for `lastVisibleRegion` before the user pans. Continental US.
+    private static let defaultFramedRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 39.8283, longitude: -98.5795),
         span: MKCoordinateSpan(latitudeDelta: 35, longitudeDelta: 55)
     )
@@ -32,6 +36,7 @@ struct OnboardingView: View {
     @State private var friends: [TweenFriend] = FriendRoster.load()
     @State private var editorMode: FriendEditor?
     @State private var editorName: String = ""
+    @State private var pendingShare: ShareIntent?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -264,52 +269,60 @@ struct OnboardingView: View {
     private var bottomPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 14) {
-                if !searchResults.isEmpty {
-                    dragHandle
-                }
-
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Tween")
-                            .font(.largeTitle.bold())
-                        Text(headlineText)
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
+                dragHandle
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(Tokens.Motion.spring) {
+                            panelDetent = panelDetent == .peek ? .compact : panelDetent
+                        }
                     }
 
-                    Spacer()
+                if panelDetent == .peek {
+                    peekIdentity
+                } else {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Tween")
+                                .font(.largeTitle.bold())
+                            Text(headlineText)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                        }
 
-                    Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(savedCoordinate == nil ? Color.secondary : Color.green)
-                }
+                        Spacer()
 
-                Picker("View", selection: $panelTab) {
-                    ForEach(HomePanelTab.allCases) { tab in
-                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                        Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(savedCoordinate == nil ? Color.secondary : Color.green)
                     }
-                }
-                .pickerStyle(.segmented)
 
-                if panelDetent != .full, panelTab == .map {
-                    statusView
-                }
-
-                switch panelTab {
-                case .map:
-                    if !searchResults.isEmpty {
-                        placeResultsList
-                    } else if let searchError {
-                        Label(searchError, systemImage: "exclamationmark.triangle.fill")
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
+                    Picker("View", selection: $panelTab) {
+                        ForEach(HomePanelTab.allCases) { tab in
+                            Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                        }
                     }
-                case .group:
-                    groupTab
-                }
+                    .pickerStyle(.segmented)
 
-                if panelDetent != .full, panelTab == .map {
-                    actionControls
+                    if panelDetent != .full, panelTab == .map {
+                        statusView
+                    }
+
+                    switch panelTab {
+                    case .map:
+                        if !searchResults.isEmpty {
+                            placeResultsList
+                        } else if let searchError {
+                            Label(searchError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                        }
+                    case .group:
+                        groupTab
+                    }
+
+                    if panelDetent != .full, panelTab == .map {
+                        actionControls
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -319,7 +332,7 @@ struct OnboardingView: View {
             .frame(height: panelHeight, alignment: .top)
             .background(.regularMaterial, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24))
             .gesture(panelDragGesture)
-            .animation(.spring(response: 0.24, dampingFraction: 0.9), value: panelDetent)
+            .animation(Tokens.Motion.spring, value: panelDetent)
             .alert(
                 editorMode?.alertTitle ?? "",
                 isPresented: Binding(
@@ -335,6 +348,21 @@ struct OnboardingView: View {
             } message: {
                 Text("Use a name you'll recognize.")
             }
+            .alert(
+                "Share your current location?",
+                isPresented: Binding(
+                    get: { pendingShare != nil },
+                    set: { if !$0 { pendingShare = nil } }
+                )
+            ) {
+                Button("Share") {
+                    pendingShare = nil
+                    updateMyDot()
+                }
+                Button("Cancel", role: .cancel) { pendingShare = nil }
+            } message: {
+                Text("Tween will capture your location once and use it to find a fair meetup spot.")
+            }
         }
     }
 
@@ -346,11 +374,17 @@ struct OnboardingView: View {
             .padding(.bottom, 2)
     }
 
+    private var peekIdentity: some View {
+        Text("Tween")
+            .font(.headline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
     private var panelDragGesture: some Gesture {
         DragGesture(minimumDistance: 18)
             .onEnded { value in
-                guard !searchResults.isEmpty else { return }
-                withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
+                withAnimation(Tokens.Motion.spring) {
                     if value.translation.height < -50 {
                         panelDetent = panelDetent.nextHigher
                     } else if value.translation.height > 50 {
@@ -360,10 +394,15 @@ struct OnboardingView: View {
             }
     }
 
+    private static let peekHeight: CGFloat = 60
+
     private var panelHeight: CGFloat? {
+        if panelDetent == .peek { return Self.peekHeight }
         guard !searchResults.isEmpty || panelTab == .group else { return nil }
         let screenHeight = UIScreen.main.bounds.height
         switch panelDetent {
+        case .peek:
+            return Self.peekHeight
         case .compact:
             return panelTab == .group ? 360 : 238
         case .medium:
@@ -390,7 +429,7 @@ struct OnboardingView: View {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
         } else {
             HStack(spacing: 10) {
-                Button(action: updateMyDot) {
+                Button { pendingShare = .update } label: {
                     HStack {
                         if isRequesting {
                             ProgressView()
@@ -575,6 +614,8 @@ struct OnboardingView: View {
 
     private var placeListHeight: CGFloat {
         switch panelDetent {
+        case .peek:
+            return 0
         case .compact:
             return 176
         case .medium:
@@ -832,7 +873,7 @@ struct OnboardingView: View {
             focusOnPeople()
             return
         }
-        updateMyDot()
+        pendingShare = .initial
     }
 
     private func beginAdd() {
@@ -884,6 +925,9 @@ struct OnboardingView: View {
         if let coordinate = item.placemark.location?.coordinate {
             centerMap(on: coordinate, avoidingBottomOverlay: true)
         }
+        withAnimation(Tokens.Motion.spring) {
+            panelDetent = .peek
+        }
     }
 
     private func leaveTween() {
@@ -894,8 +938,8 @@ struct OnboardingView: View {
         searchResults = []
         searchError = nil
         provider = LocationProvider()
-        withAnimation(.easeInOut(duration: 0.35)) {
-            position = .automatic
+        withAnimation(Tokens.Motion.gentle) {
+            position = .region(Self.defaultFramedRegion)
         }
     }
 
@@ -935,8 +979,8 @@ struct OnboardingView: View {
         } else if savedCoordinate != nil || peerCoordinate != nil {
             focusOnPeople()
         } else {
-            withAnimation(.easeInOut(duration: 0.35)) {
-                position = .automatic
+            withAnimation(Tokens.Motion.gentle) {
+                position = .region(Self.defaultFramedRegion)
             }
         }
     }
@@ -972,17 +1016,34 @@ struct OnboardingView: View {
         }
     }
 
+    /// Gently pan to a coordinate at the user's *current* zoom — never shrink span.
+    /// If the target is already inside the visible region with a 12 % inset, do nothing
+    /// (the spot is already on-screen; re-assigning would re-animate the camera for no reason).
     private func centerMap(on coordinate: CLLocationCoordinate2D, avoidingBottomOverlay: Bool = false) {
-        let span = MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015)
+        let span = lastVisibleRegion.span
+        let insetMargin: Double = 0.12
+
+        let latInset = span.latitudeDelta * insetMargin
+        let lonInset = span.longitudeDelta * insetMargin
+        let visibleCenter = lastVisibleRegion.center
+        let halfLat = span.latitudeDelta / 2
+        let halfLon = span.longitudeDelta / 2
+
+        let alreadyVisible =
+            abs(coordinate.latitude - visibleCenter.latitude) <= (halfLat - latInset) &&
+            abs(coordinate.longitude - visibleCenter.longitude) <= (halfLon - lonInset)
+        if alreadyVisible { return }
+
         let adjustedCenter = avoidingBottomOverlay
-            ? CLLocationCoordinate2D(latitude: coordinate.latitude - span.latitudeDelta * 0.32, longitude: coordinate.longitude)
-            : coordinate
-        position = .region(
-            MKCoordinateRegion(
-                center: adjustedCenter,
-                span: span
+            ? CLLocationCoordinate2D(
+                latitude: coordinate.latitude - span.latitudeDelta * 0.20,
+                longitude: coordinate.longitude
             )
-        )
+            : coordinate
+
+        withAnimation(Tokens.Motion.spring) {
+            position = .region(MKCoordinateRegion(center: adjustedCenter, span: span))
+        }
     }
 
     private func focusOnPeople() {
@@ -1109,6 +1170,7 @@ struct OnboardingView: View {
     /// bigger shift.
     private var sheetBottomInsetFraction: Double {
         switch panelDetent {
+        case .peek:    0
         case .compact: 0.13
         case .medium:  0.24
         case .full:    0.32
@@ -1328,6 +1390,13 @@ private enum HomePanelTab: String, CaseIterable, Identifiable {
     }
 }
 
+private enum ShareIntent: Identifiable {
+    case initial
+    case update
+
+    var id: String { String(describing: self) }
+}
+
 private enum FriendEditor: Identifiable {
     case add
     case rename(TweenFriend)
@@ -1348,12 +1417,14 @@ private enum FriendEditor: Identifiable {
 }
 
 private enum PanelDetent {
+    case peek
     case compact
     case medium
     case full
 
     var nextHigher: PanelDetent {
         switch self {
+        case .peek: .compact
         case .compact: .medium
         case .medium: .full
         case .full: .full
@@ -1362,7 +1433,8 @@ private enum PanelDetent {
 
     var nextLower: PanelDetent {
         switch self {
-        case .compact: .compact
+        case .peek: .peek
+        case .compact: .peek
         case .medium: .compact
         case .full: .medium
         }
