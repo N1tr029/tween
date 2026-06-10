@@ -83,18 +83,18 @@ enum Tokens {
     }
 
     enum Duration {
-        static let fast: Double = 0.18
-        static let standard: Double = 0.28
-        static let slow: Double = 0.45
+        static let fast: Double = 0.40
+        static let standard: Double = 0.48
+        static let slow: Double = 0.66
     }
 
     /// Pre-built animations. Prefer these over ad-hoc `.spring(response:dampingFraction:)`.
     enum Motion {
-        static let snappy: Animation = .snappy(duration: Duration.fast)
-        static let spring: Animation = .spring(response: Duration.standard, dampingFraction: 0.86)
+        static let snappy: Animation = .smooth(duration: Duration.fast)
+        static let spring: Animation = .spring(response: Duration.standard, dampingFraction: 0.88)
         static let gentle: Animation = .easeInOut(duration: Duration.slow)
         /// The scale factor used by `View.tweenPressFeedback()`.
-        static let pressScale: CGFloat = 0.96
+        static let pressScale: CGFloat = 0.97
     }
 
     enum Elevation {

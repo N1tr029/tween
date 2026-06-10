@@ -1,15 +1,24 @@
 import Foundation
 
-/// A friend in the user's local Tween roster. Identity is local-only — there is no server
-/// and no link to iMessage participants in this phase. The `id` is stable so renames don't
-/// change a friend's visual identity (color, avatar).
+/// A friend in the user's local Tween roster. Identity is local-only — there is no server.
+/// When a friend comes from Contacts we keep the contact identifier and a Messages-capable
+/// handle so the host app can open a pre-addressed ping composer.
 struct TweenFriend: Codable, Identifiable, Equatable {
     let id: UUID
     var name: String
+    var contactIdentifier: String?
+    var messageHandle: String?
 
-    init(id: UUID = UUID(), name: String) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        contactIdentifier: String? = nil,
+        messageHandle: String? = nil
+    ) {
         self.id = id
         self.name = name
+        self.contactIdentifier = contactIdentifier
+        self.messageHandle = messageHandle
     }
 }
 

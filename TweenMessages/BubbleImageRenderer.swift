@@ -49,7 +49,7 @@ enum BubbleImageRenderer {
             let snapshot = try await MKMapSnapshotter(options: options).start()
             return composite(snapshot: snapshot, selfCoord: selfCoord, peer: peer, chosenSpot: chosenSpot, size: size)
         } catch {
-            return nil
+            return fallbackImage(selfCoord: selfCoord, peer: peer, chosenSpot: chosenSpot, size: size)
         }
     }
 
@@ -87,8 +87,98 @@ enum BubbleImageRenderer {
             drawBrandedStrip(
                 in: ctx.cgContext,
                 size: size,
-                spotName: chosenSpot?.item.name
+                spotName: stripTitle(selfCoord: selfCoord, peer: peer, chosenSpot: chosenSpot)
             )
+        }
+    }
+
+    private static func fallbackImage(
+        selfCoord: CLLocationCoordinate2D?,
+        peer: CLLocationCoordinate2D,
+        chosenSpot: RankedSpot?,
+        size: CGSize
+    ) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { ctx in
+            let rect = CGRect(origin: .zero, size: size)
+            let colors = [
+                UIColor(red: 0.90, green: 0.96, blue: 0.95, alpha: 1).cgColor,
+                UIColor(red: 0.76, green: 0.89, blue: 0.88, alpha: 1).cgColor,
+            ]
+            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])
+            ctx.cgContext.drawLinearGradient(
+                gradient!,
+                start: CGPoint(x: rect.minX, y: rect.minY),
+                end: CGPoint(x: rect.maxX, y: rect.maxY),
+                options: []
+            )
+
+            drawMapGrid(in: rect)
+
+            let selfPoint = CGPoint(x: size.width * 0.32, y: size.height * 0.44)
+            let peerPoint = selfCoord == nil
+                ? CGPoint(x: size.width * 0.50, y: size.height * 0.42)
+                : CGPoint(x: size.width * 0.68, y: size.height * 0.44)
+            let spotPoint = CGPoint(x: size.width * 0.50, y: size.height * 0.30)
+
+            if selfCoord != nil {
+                drawLine(from: selfPoint, to: peerPoint)
+                if chosenSpot != nil {
+                    drawLine(from: selfPoint, to: spotPoint)
+                    drawLine(from: peerPoint, to: spotPoint)
+                    drawMidpointStar(at: spotPoint)
+                }
+                drawDot(at: selfPoint, color: Tokens.Palette.UIKit.pinSelf, isFriend: false)
+            }
+            drawDot(at: peerPoint, color: Tokens.Palette.UIKit.pinFriend, isFriend: true)
+
+            drawBrandedStrip(
+                in: ctx.cgContext,
+                size: size,
+                spotName: stripTitle(selfCoord: selfCoord, peer: peer, chosenSpot: chosenSpot)
+            )
+        }
+    }
+
+    private static func stripTitle(
+        selfCoord: CLLocationCoordinate2D?,
+        peer: CLLocationCoordinate2D,
+        chosenSpot: RankedSpot?
+    ) -> String {
+        if let spotName = chosenSpot?.item.name {
+            return spotName
+        }
+        if let selfCoord {
+            return "\(shortDistance(from: selfCoord, to: peer)) apart"
+        }
+        return "I'm in"
+    }
+
+    private static func shortDistance(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) -> String {
+        let meters = CLLocation(latitude: start.latitude, longitude: start.longitude)
+            .distance(from: CLLocation(latitude: end.latitude, longitude: end.longitude))
+        if meters < 1609 {
+            return "\(Int((meters / 10).rounded() * 10)) m"
+        }
+        return String(format: "%.1f mi", meters / 1609.344)
+    }
+
+    private static func drawMapGrid(in rect: CGRect) {
+        UIColor.white.withAlphaComponent(0.34).setStroke()
+        for offset in stride(from: -rect.height, through: rect.width, by: 72) {
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: offset, y: rect.maxY))
+            path.addLine(to: CGPoint(x: offset + rect.height, y: rect.minY))
+            path.lineWidth = 3
+            path.stroke()
+        }
+        UIColor.white.withAlphaComponent(0.24).setStroke()
+        for y in stride(from: rect.minY + 34, through: rect.maxY, by: 68) {
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: rect.minX, y: y))
+            path.addLine(to: CGPoint(x: rect.maxX, y: y + 22))
+            path.lineWidth = 2
+            path.stroke()
         }
     }
 

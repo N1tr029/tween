@@ -588,6 +588,7 @@
 				DEVELOPMENT_TEAM = T4VT6R837D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSContactsUsageDescription = "Tween uses Contacts to add friends you can ping in Messages.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tween uses your location once to share where you are for a meetup.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -619,6 +620,7 @@
 				DEVELOPMENT_TEAM = T4VT6R837D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSContactsUsageDescription = "Tween uses Contacts to add friends you can ping in Messages.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Tween uses your location once to share where you are for a meetup.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

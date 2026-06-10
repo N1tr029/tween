@@ -4,7 +4,10 @@
 //
 
 import CoreLocation
+import Contacts
 import MapKit
+import Combine
+import MessageUI
 import SwiftUI
 import UIKit
 
@@ -24,10 +27,14 @@ struct OnboardingView: View {
     @State private var panelTab: HomePanelTab = .map
     @State private var position: MapCameraPosition
     @State private var lastVisibleRegion: MKCoordinateRegion
+    @State private var livePanelHeight: CGFloat?
+    @State private var panelDragStartHeight: CGFloat?
+    @State private var userClearedLocation = false
+    @State private var requestedPlaceScrollID: String?
 
     /// The country-level fallback region used on a fresh launch (no cached coordinate)
     /// and as the seed for `lastVisibleRegion` before the user pans. Continental US.
-    private static let defaultFramedRegion = MKCoordinateRegion(
+    fileprivate static let defaultFramedRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 39.8283, longitude: -98.5795),
         span: MKCoordinateSpan(latitudeDelta: 35, longitudeDelta: 55)
     )
@@ -48,6 +55,10 @@ struct OnboardingView: View {
     @State private var friends: [TweenFriend] = FriendRoster.load()
     @State private var editorMode: FriendEditor?
     @State private var editorName: String = ""
+    @State private var showContactSearch = false
+    @State private var pendingPing: MessagePing?
+    @State private var pingError: String?
+    @State private var copyConfirmation: String?
     @State private var pendingShare: ShareIntent?
     @State private var detailItem: MKMapItem?
     @State private var selectedCategory: CategoryPreset?
@@ -57,6 +68,7 @@ struct OnboardingView: View {
     @State private var pingTick = Date()
     @State private var lastReplyAt: Date? = PingLog.lastIncomingReplyAt
     @State private var searchTask: Task<Void, Never>?
+    @StateObject private var searchCompleter = SearchCompleter()
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
 
@@ -65,14 +77,12 @@ struct OnboardingView: View {
             styledMap
                 .ignoresSafeArea()
 
-            searchBar
-
             VStack {
                 HStack {
                     Spacer()
                     mapControls
                 }
-                .padding(.top, Tokens.Space.s8 + Tokens.Space.s7 + 2)
+                .padding(.top, Tokens.Space.s8 + Tokens.Space.s5)
                 .padding(.horizontal, Tokens.Space.s4)
                 Spacer()
             }
@@ -97,6 +107,46 @@ struct OnboardingView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [Self.inviteMessage])
+        }
+        .sheet(isPresented: $showContactSearch) {
+            ContactSearchSheet(
+                existingFriends: friends,
+                onSelect: addContactFriend,
+                onCancel: { showContactSearch = false }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $pendingPing) { ping in
+            MessageComposeSheet(
+                recipients: [ping.recipient],
+                body: ping.body,
+                onFinish: {
+                    pendingPing = nil
+                }
+            )
+        }
+        .alert(
+            "Can't send ping",
+            isPresented: Binding(
+                get: { pingError != nil },
+                set: { if !$0 { pingError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { pingError = nil }
+        } message: {
+            Text(pingError ?? "")
+        }
+        .alert(
+            "Copied",
+            isPresented: Binding(
+                get: { copyConfirmation != nil },
+                set: { if !$0 { copyConfirmation = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { copyConfirmation = nil }
+        } message: {
+            Text(copyConfirmation ?? "")
         }
     }
 
@@ -133,8 +183,7 @@ struct OnboardingView: View {
                     if let coordinate = item.placemark.location?.coordinate {
                         Annotation(item.name ?? "Place", coordinate: coordinate) {
                             Button {
-                                selectedPlace = item
-                                centerMap(on: coordinate, avoidingBottomOverlay: true)
+                                selectPlaceFromMap(item)
                             } label: {
                                 placeAnnotation(item: item)
                             }
@@ -232,6 +281,14 @@ struct OnboardingView: View {
     }
     #endif
 
+    private var topSearchStack: some View {
+        VStack(spacing: Tokens.Space.s2) {
+            searchBar
+            categoryChipRow
+        }
+        .padding(.top, Tokens.Space.s3)
+    }
+
     private var searchBar: some View {
         HStack(spacing: Tokens.Space.s2) {
             Image(systemName: "magnifyingglass")
@@ -240,13 +297,16 @@ struct OnboardingView: View {
                 .textInputAutocapitalization(.never)
                 .submitLabel(.search)
                 .focused($searchFocused)
-                .onSubmit { searchPlaces() }
+                .onSubmit { commitSearch() }
 
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
                     searchResults = []
+                    rankedSpots = []
                     selectedPlace = nil
+                    searchError = nil
+                    searchCompleter.queryFragment = ""
                     panelDetent = .medium
                     focusOnPeople()
                 } label: {
@@ -259,29 +319,44 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, Tokens.Space.s3)
         .frame(height: 48)
+        .contentShape(Rectangle())
         .tweenGlass(cornerRadius: Tokens.Radius.chip)
-        .padding(.horizontal, Tokens.Space.s4)
-        .padding(.top, Tokens.Space.s3)
+        .onTapGesture {
+            searchFocused = true
+            if panelDetent == .peek {
+                withAnimation(Tokens.Motion.spring) { panelDetent = .medium }
+            }
+        }
         .onChange(of: searchText) { _, newValue in
-            scheduleDebouncedSearch(for: newValue)
+            updateSearchSuggestions(for: newValue)
         }
     }
 
-    /// Cancels any in-flight debounced search and schedules a new one 400ms after the
-    /// latest keystroke. Empty input shortcut-clears the result state.
-    private func scheduleDebouncedSearch(for input: String) {
+    /// Updates lightweight Apple-Maps-style suggestions while typing. Full place search only
+    /// happens when the user submits or taps a suggestion.
+    private func updateSearchSuggestions(for input: String) {
+        guard searchFocused else { return }
         searchTask?.cancel()
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             searchResults = []
             rankedSpots = []
+            selectedPlace = nil
             searchError = nil
+            searchCompleter.queryFragment = ""
             return
         }
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
-            await MainActor.run { searchPlaces() }
+            await MainActor.run {
+                searchResults = []
+                rankedSpots = []
+                selectedPlace = nil
+                searchError = nil
+                searchCompleter.region = activeSearchRegion
+                searchCompleter.queryFragment = trimmed
+            }
         }
     }
 
@@ -360,151 +435,205 @@ struct OnboardingView: View {
     }
 
     private var bottomPanel: some View {
-        VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
-            VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
-                dragHandle
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(Tokens.Motion.spring) {
-                            panelDetent = panelDetent == .peek ? .medium : panelDetent
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            sheetHeader
+                .padding(.horizontal, Tokens.Space.s5)
+                .padding(.top, searchResults.isEmpty ? Tokens.Space.s3 : Tokens.Space.s2)
 
-                if panelDetent == .peek {
-                    peekSummary
-                } else {
-                    if !monitor.isOnline {
-                        offlineBanner
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: Tokens.Space.s1) {
-                            Text("Tween")
-                                .font(Tokens.Typography.display)
-                            Text(headlineText)
-                                .font(Tokens.Typography.headline)
-                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            if panelDetent == .peek {
+                peekSummary
+                    .padding(.horizontal, Tokens.Space.s5)
+                    .padding(.bottom, Tokens.Space.s4)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
+                        if !monitor.isOnline {
+                            offlineBanner
                         }
 
-                        Spacer()
+                        searchBar
+                        categoryChipRow
+                        searchSuggestionsList
 
-                        Button {
-                            withAnimation(Tokens.Motion.spring) { showTutorial = true }
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(Tokens.Typography.title)
-                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("About Tween")
+                        panelTitleRow
+                        panelPicker
 
-                        Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
-                            .font(Tokens.Typography.title)
-                            .foregroundStyle(savedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.success)
-                    }
-
-                    Picker("View", selection: $panelTab) {
-                        ForEach(HomePanelTab.allCases) { tab in
-                            Label(tab.title, systemImage: tab.systemImage).tag(tab)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if panelDetent != .full, panelTab == .map {
-                        statusView
-                    }
-
-                    Group {
-                        switch panelTab {
-                        case .map:
-                            if let detailItem {
-                                SpotDetail(
-                                    item: detailItem,
-                                    ranked: rankedSpot(for: detailItem),
-                                    symbol: placeIcon(for: detailItem),
-                                    categoryTint: placeColor(for: detailItem),
-                                    typeLabel: placeTypeLabel(for: detailItem),
-                                    youDistance: distanceFrom(savedCoordinate, to: detailItem),
-                                    friendDistance: distanceFrom(peerCoordinate, to: detailItem),
-                                    namespace: spotTransition,
-                                    onShowOnMap: { showOnMap(detailItem) },
-                                    onSendToChat: { sendToChat(detailItem) },
-                                    onOpenInMaps: { openInMaps(detailItem) },
-                                    onClose: closeDetail
-                                )
-                            } else if !searchResults.isEmpty {
-                                placeResultsList
-                            } else if searchError != nil {
-                                searchErrorCard
-                            } else if savedCoordinate == nil && peerCoordinate == nil {
-                                VStack(spacing: Tokens.Space.s3) {
-                                    freshLaunchHero
-                                    categoryChipRow
-                                }
-                            } else {
-                                categoryChipRow
+                            if panelDetent != .full, panelTab == .map {
+                                statusView
                             }
-                        case .waiting:
-                            waitingTab
-                        }
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .animation(Tokens.Motion.spring, value: detailItem)
-                    .animation(Tokens.Motion.spring, value: searchResults.count)
-                    .animation(Tokens.Motion.spring, value: searchError)
-                    .animation(Tokens.Motion.spring, value: panelTab)
 
-                    if panelDetent != .full, panelTab == .map {
-                        actionControls
+                            panelContent
+                        }
+                        .padding(.horizontal, Tokens.Space.s5)
+                        .padding(.top, Tokens.Space.s2)
+                        .padding(.bottom, scrollContentBottomPadding)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .animation(nil, value: panelTab)
+                    .onChange(of: requestedPlaceScrollID) { _, id in
+                        guard let id else { return }
+                        withAnimation(Tokens.Motion.spring) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
                     }
                 }
-            }
-            .padding(.horizontal, Tokens.Space.s5)
-            .padding(.top, searchResults.isEmpty ? Tokens.Space.s5 : Tokens.Space.s3 - 2)
-            .padding(.bottom, searchResults.isEmpty ? Tokens.Space.s7 + 2 : Tokens.Space.s6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: panelHeight, alignment: .top)
-            .background {
-                UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
-                    .fill(.regularMaterial)
-                    .overlay {
-                        UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
-                            .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+
+                if shouldShowActionControls {
+                    VStack(spacing: 0) {
+                        Divider()
+                            .opacity(0.35)
+                        actionControls
+                            .padding(.horizontal, Tokens.Space.s5)
+                            .padding(.top, Tokens.Space.s3)
+                            .padding(.bottom, bottomSafeAreaInset + Tokens.Space.s3)
                     }
+                    .background(.regularMaterial)
+                }
             }
-            .tweenElevation(Tokens.Elevation.sheet)
-            .gesture(panelDragGesture)
-            .animation(Tokens.Motion.spring, value: panelDetent)
-            .animation(Tokens.Motion.spring, value: monitor.isOnline)
-            .alert(
-                editorMode?.alertTitle ?? "",
-                isPresented: Binding(
-                    get: { editorMode != nil },
-                    set: { if !$0 { editorMode = nil } }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: panelInteractiveHeight, alignment: .top)
+        .background {
+            UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
+                .fill(.regularMaterial)
+                .overlay {
+                    UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
+                        .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+                }
+        }
+        .tweenElevation(Tokens.Elevation.sheet)
+        .transaction { transaction in
+            if livePanelHeight != nil {
+                transaction.animation = nil
+            }
+        }
+        .animation(Tokens.Motion.spring, value: panelDetent)
+        .animation(Tokens.Motion.spring, value: monitor.isOnline)
+        .alert(
+            editorMode?.alertTitle ?? "",
+            isPresented: Binding(
+                get: { editorMode != nil },
+                set: { if !$0 { editorMode = nil } }
+            )
+        ) {
+            TextField("Name", text: $editorName)
+                .textInputAutocapitalization(.words)
+            Button("Save", action: saveEditor)
+                .disabled(editorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel) { editorMode = nil }
+        } message: {
+            Text("Use a name you'll recognize.")
+        }
+        .sheet(item: $pendingShare) { _ in
+            LocationShareSheet(
+                onShare: {
+                    pendingShare = nil
+                    updateMyDot()
+                },
+                onCancel: { pendingShare = nil }
+            )
+            .presentationDetents([.height(440)])
+            .presentationDragIndicator(.visible)
+        }
+        .sensoryFeedback(.selection, trigger: detailItem)
+        .sensoryFeedback(.impact(weight: .light), trigger: selectedPlace)
+    }
+
+    private var sheetHeader: some View {
+        HStack(spacing: Tokens.Space.s2) {
+            Color.clear
+                .frame(width: 40, height: 40)
+
+            Spacer()
+
+            dragZone
+
+            Spacer()
+
+            Button(action: togglePanelDetent) {
+                Image(systemName: panelDetent == .full ? "chevron.down" : "chevron.up")
+                    .font(Tokens.Typography.headline.weight(.bold))
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .frame(width: 40, height: 40)
+                    .background(Tokens.Palette.surface.opacity(0.7), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(panelDetent == .full ? "Collapse sheet" : "Expand sheet")
+        }
+        .frame(height: 54)
+    }
+
+    private var panelTitleRow: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: Tokens.Space.s1) {
+                Text("Tween")
+                    .font(Tokens.Typography.display)
+                Text(headlineText)
+                    .font(Tokens.Typography.headline)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Button {
+                withAnimation(Tokens.Motion.spring) { showTutorial = true }
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(Tokens.Typography.title)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("About Tween")
+
+            Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
+                .font(Tokens.Typography.title)
+                .foregroundStyle(savedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.success)
+        }
+    }
+
+    private var panelPicker: some View {
+        Picker("View", selection: $panelTab) {
+            ForEach(HomePanelTab.allCases) { tab in
+                Label(tab.title, systemImage: tab.systemImage).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
+        switch panelTab {
+        case .map:
+            if let detailItem {
+                SpotDetail(
+                    item: detailItem,
+                    ranked: rankedSpot(for: detailItem),
+                    symbol: placeIcon(for: detailItem),
+                    categoryTint: placeColor(for: detailItem),
+                    typeLabel: placeTypeLabel(for: detailItem),
+                    youDistance: distanceFrom(savedCoordinate, to: detailItem),
+                    friendDistance: distanceFrom(peerCoordinate, to: detailItem),
+                    namespace: spotTransition,
+                    onShowOnMap: { showOnMap(detailItem) },
+                    onSendToChat: { sendToChat(detailItem) },
+                    onCopyLink: { copyLink(for: detailItem) },
+                    onOpenInAppleMaps: { openInAppleMaps(detailItem) },
+                    onOpenInGoogleMaps: { openInGoogleMaps(detailItem) },
+                    onClose: closeDetail
                 )
-            ) {
-                TextField("Name", text: $editorName)
-                    .textInputAutocapitalization(.words)
-                Button("Save", action: saveEditor)
-                    .disabled(editorName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Cancel", role: .cancel) { editorMode = nil }
-            } message: {
-                Text("Use a name you'll recognize.")
+            } else if !searchResults.isEmpty {
+                placeResultsList
+            } else if searchError != nil {
+                searchErrorCard
+            } else if savedCoordinate == nil && peerCoordinate == nil {
+                freshLaunchHero
+            } else {
+                EmptyView()
             }
-            .sheet(item: $pendingShare) { _ in
-                LocationShareSheet(
-                    onShare: {
-                        pendingShare = nil
-                        updateMyDot()
-                    },
-                    onCancel: { pendingShare = nil }
-                )
-                .presentationDetents([.height(440)])
-                .presentationDragIndicator(.visible)
-            }
-            .sensoryFeedback(.selection, trigger: detailItem)
-            .sensoryFeedback(.impact(weight: .light), trigger: selectedPlace)
+        case .waiting:
+            waitingTab
         }
     }
 
@@ -512,8 +641,39 @@ struct OnboardingView: View {
         Capsule()
             .fill(Tokens.Palette.onSurfaceMuted.opacity(0.35))
             .frame(width: 42, height: 5)
-            .frame(maxWidth: .infinity)
-            .padding(.bottom, 2)
+    }
+
+    private var dragZone: some View {
+        dragHandle
+            .frame(width: 150, height: 48)
+            .contentShape(Rectangle())
+            .highPriorityGesture(panelDragGesture)
+            .onTapGesture(perform: togglePanelDetent)
+    }
+
+    private var shouldShowActionControls: Bool {
+        panelDetent != .full &&
+        panelTab == .map &&
+        detailItem == nil &&
+        searchResults.isEmpty &&
+        searchError == nil
+    }
+
+    private var scrollContentBottomPadding: CGFloat {
+        shouldShowActionControls ? Tokens.Space.s3 : bottomSafeAreaInset + Tokens.Space.s4
+    }
+
+    private func togglePanelDetent() {
+        withAnimation(Tokens.Motion.spring) {
+            switch panelDetent {
+            case .peek:
+                panelDetent = .medium
+            case .medium:
+                panelDetent = .full
+            case .full:
+                panelDetent = .medium
+            }
+        }
     }
 
     private var offlineBanner: some View {
@@ -635,30 +795,67 @@ struct OnboardingView: View {
     }
 
     private var panelDragGesture: some Gesture {
-        DragGesture(minimumDistance: 18)
+        DragGesture(minimumDistance: 1)
+            .onChanged { value in
+                let startHeight = panelDragStartHeight ?? height(for: panelDetent)
+                panelDragStartHeight = startHeight
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    livePanelHeight = clampedPanelHeight(startHeight - value.translation.height)
+                }
+            }
             .onEnded { value in
+                let startHeight = panelDragStartHeight ?? height(for: panelDetent)
+                let targetHeight = startHeight - value.predictedEndTranslation.height
                 withAnimation(Tokens.Motion.spring) {
-                    if value.translation.height < -50 {
-                        panelDetent = panelDetent.nextHigher
-                    } else if value.translation.height > 50 {
-                        panelDetent = panelDetent.nextLower
-                    }
+                    panelDetent = nearestPanelDetent(to: targetHeight)
+                    livePanelHeight = nil
+                    panelDragStartHeight = nil
                 }
             }
     }
 
     private static let peekHeight: CGFloat = 120
 
+    private var panelInteractiveHeight: CGFloat {
+        livePanelHeight ?? height(for: panelDetent)
+    }
+
     private var panelHeight: CGFloat? {
+        height(for: panelDetent)
+    }
+
+    private func height(for detent: PanelDetent) -> CGFloat {
         let screenHeight = UIScreen.main.bounds.height
-        switch panelDetent {
+        switch detent {
         case .peek:
             return Self.peekHeight
         case .medium:
-            return screenHeight * 0.45
+            if detailItem != nil { return screenHeight * 0.62 }
+            if !searchResults.isEmpty { return screenHeight * 0.58 }
+            return screenHeight * 0.48
         case .full:
-            return screenHeight - 92
+            return screenHeight - 86
         }
+    }
+
+    private var bottomSafeAreaInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }?
+            .safeAreaInsets.bottom ?? 0
+    }
+
+    private func nearestPanelDetent(to height: CGFloat) -> PanelDetent {
+        PanelDetent.allCases.min {
+            abs(self.height(for: $0) - height) < abs(self.height(for: $1) - height)
+        } ?? panelDetent
+    }
+
+    private func clampedPanelHeight(_ height: CGFloat) -> CGFloat {
+        min(max(height, self.height(for: .peek)), self.height(for: .full))
     }
 
     @ViewBuilder
@@ -701,14 +898,14 @@ struct OnboardingView: View {
             .frame(height: 52)
             .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
         } else if peerCoordinate == nil {
-            Button { pendingShare = .update } label: {
+            Button(action: updateMyDot) {
                 HStack(spacing: Tokens.Space.s2) {
                     if isRequesting {
                         ProgressView()
                             .tint(.white)
                             .transition(.scale.combined(with: .opacity))
                     }
-                    Text("Share your location")
+                    Text("Update my dot")
                         .contentTransition(.numericText())
                 }
             }
@@ -797,7 +994,9 @@ struct OnboardingView: View {
                 .font(Tokens.Typography.callout)
                 .foregroundStyle(Tokens.Palette.onSurface)
                 .multilineTextAlignment(.center)
-            Button(action: searchPlaces) {
+            Button {
+                searchPlaces()
+            } label: {
                 Text("Try again")
             }
             .buttonStyle(.tweenPrimary)
@@ -830,18 +1029,112 @@ struct OnboardingView: View {
                     .animation(Tokens.Motion.snappy, value: isSelected)
                 }
             }
+            .padding(.horizontal, Tokens.Space.s4)
         }
+    }
+
+    @ViewBuilder
+    private var searchSuggestionsList: some View {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if searchFocused, !trimmed.isEmpty, searchResults.isEmpty, detailItem == nil {
+            VStack(spacing: 0) {
+                if searchCompleter.suggestions.isEmpty {
+                    suggestionRow(
+                        icon: "magnifyingglass",
+                        title: "Search for “\(trimmed)”",
+                        subtitle: "Press return to search nearby"
+                    ) {
+                        commitSearch()
+                    }
+                } else {
+                    ForEach(searchCompleter.suggestions.prefix(8), id: \.self) { suggestion in
+                        suggestionRow(
+                            icon: icon(for: suggestion),
+                            title: suggestion.title,
+                            subtitle: suggestion.subtitle.isEmpty ? "Search Nearby" : suggestion.subtitle
+                        ) {
+                            commitSearch(suggestion)
+                        }
+                    }
+                }
+            }
+            .background(Tokens.Palette.surface.opacity(0.78), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                    .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+            }
+        }
+    }
+
+    private func suggestionRow(
+        icon: String,
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: Tokens.Space.s3) {
+                ZStack {
+                    Circle().fill(Tokens.Palette.onSurfaceMuted.opacity(0.16))
+                    Image(systemName: icon)
+                        .font(Tokens.Typography.callout.weight(.semibold))
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                }
+                .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(Tokens.Typography.headline)
+                        .foregroundStyle(Tokens.Palette.onSurface)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, Tokens.Space.s3)
+            .padding(.vertical, Tokens.Space.s2 + 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            Divider()
+                .padding(.leading, 60)
+        }
+    }
+
+    private func icon(for suggestion: MKLocalSearchCompletion) -> String {
+        let text = "\(suggestion.title) \(suggestion.subtitle)".lowercased()
+        if text.contains("coffee") || text.contains("starbucks") || text.contains("cafe") { return "cup.and.saucer.fill" }
+        if text.contains("cinema") || text.contains("movie") || text.contains("theater") { return "film.fill" }
+        if text.contains("restaurant") || text.contains("food") { return "fork.knife" }
+        if text.contains("pharmacy") { return "cross.case.fill" }
+        return "magnifyingglass"
+    }
+
+    private func commitSearch(_ suggestion: MKLocalSearchCompletion? = nil) {
+        searchTask?.cancel()
+        if let suggestion {
+            searchText = suggestion.title
+        }
+        searchFocused = false
+        searchCompleter.queryFragment = ""
+        withAnimation(Tokens.Motion.spring) {
+            panelTab = .map
+            panelDetent = .medium
+        }
+        searchPlaces(query: suggestion?.title)
     }
 
     private func selectCategory(_ preset: CategoryPreset) {
         selectedCategory = preset
+        searchFocused = true
         searchText = preset.query
-        // If both endpoints are set, fire the search immediately — the user has both dots,
-        // there's nothing more to clarify before computing fairness.
-        if savedCoordinate != nil && peerCoordinate != nil {
-            searchPlaces()
-        } else {
-            searchFocused = true
+        withAnimation(Tokens.Motion.spring) {
+            panelDetent = .medium
         }
     }
 
@@ -865,14 +1158,12 @@ struct OnboardingView: View {
                     .background(Tokens.Palette.onSurfaceMuted.opacity(0.12), in: Circle())
             }
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: Tokens.Space.s3) {
-                    ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
-                        placeResultRow(item: item, index: index)
-                    }
+            VStack(spacing: Tokens.Space.s3) {
+                ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
+                    placeResultRow(item: item, index: index)
+                        .id(placeListID(for: item))
                 }
             }
-            .frame(maxHeight: placeListHeight)
         }
     }
 
@@ -913,21 +1204,7 @@ struct OnboardingView: View {
             } else {
                 friendList
                 inviteFriendsRow
-                Button(action: imInForGroup) {
-                    HStack(spacing: Tokens.Space.s2) {
-                        if isRequesting {
-                            ProgressView()
-                                .tint(.white)
-                                .transition(.scale.combined(with: .opacity))
-                        }
-                        Text(savedCoordinate == nil ? "Share my location" : "I'm in")
-                            .contentTransition(.numericText())
-                    }
-                }
-                .buttonStyle(.tweenPrimary)
-                .disabled(isRequesting)
-                .animation(Tokens.Motion.spring, value: isRequesting)
-                .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
+                groupLocationButton
             }
         }
     }
@@ -941,13 +1218,28 @@ struct OnboardingView: View {
                 .font(Tokens.Typography.callout)
                 .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 .multilineTextAlignment(.center)
-            Button(action: beginAdd) {
-                Text("Add person")
-            }
-            .buttonStyle(.tweenPrimary)
+            groupLocationButton
         }
         .padding(.vertical, Tokens.Space.s4 + 2)
         .frame(maxWidth: .infinity)
+    }
+
+    private var groupLocationButton: some View {
+        Button(action: toggleGroupLocation) {
+            HStack(spacing: Tokens.Space.s2) {
+                if isRequesting {
+                    ProgressView()
+                        .tint(savedCoordinate == nil ? .white : Tokens.Palette.brand)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Text(savedCoordinate == nil ? "I'm in" : "No longer in")
+                    .contentTransition(.numericText())
+            }
+        }
+        .buttonStyle(savedCoordinate == nil ? .tweenPrimary : .tweenSubtle)
+        .disabled(isRequesting)
+        .animation(Tokens.Motion.spring, value: isRequesting)
+        .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
     }
 
     private var friendList: some View {
@@ -965,7 +1257,7 @@ struct OnboardingView: View {
                         Text(friend.name)
                             .font(Tokens.Typography.headline)
                             .foregroundStyle(Tokens.Palette.onSurface)
-                        Text(pingStatusText(for: friend))
+                        Text(friendSubtitle(for: friend))
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(pingStatusColor(for: friend))
                     }
@@ -974,6 +1266,7 @@ struct OnboardingView: View {
 
                     Menu {
                         Button("Ping", systemImage: "paperplane.fill") { pingFriend(friend) }
+                            .disabled(friend.messageHandle == nil)
                         Button("Rename") { beginRename(friend) }
                         Button("Delete", role: .destructive) { deleteFriend(friend) }
                     } label: {
@@ -1049,6 +1342,13 @@ struct OnboardingView: View {
         }
     }
 
+    private func friendSubtitle(for friend: TweenFriend) -> String {
+        guard let handle = friend.messageHandle, !handle.isEmpty else {
+            return "Add from Contacts to ping"
+        }
+        return "\(pingStatusText(for: friend)) · \(displayHandle(handle))"
+    }
+
     private func pingStatusColor(for friend: TweenFriend) -> Color {
         switch pingStatus(for: friend) {
         case .replied: return Tokens.Palette.brand
@@ -1095,6 +1395,13 @@ struct OnboardingView: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: Tokens.Radius.card))
         .onTapGesture { openDetail(item) }
+    }
+
+    private func placeListID(for item: MKMapItem) -> String {
+        let coordinate = item.placemark.location?.coordinate
+        let latitude = coordinate.map { String(format: "%.6f", $0.latitude) } ?? "nil"
+        let longitude = coordinate.map { String(format: "%.6f", $0.longitude) } ?? "nil"
+        return "\(item.name ?? "place")|\(latitude)|\(longitude)"
     }
 
     @ViewBuilder
@@ -1167,6 +1474,7 @@ struct OnboardingView: View {
     }
 
     private func updateMyDot() {
+        userClearedLocation = false
         provider.requestOnce { coordinate in
             guard let coordinate else { return }
             savedCoordinate = coordinate
@@ -1185,17 +1493,81 @@ struct OnboardingView: View {
             focusOnPeople()
             return
         }
-        pendingShare = .initial
+        updateMyDot()
+    }
+
+    private func toggleGroupLocation() {
+        if savedCoordinate == nil {
+            imInForGroup()
+        } else {
+            leaveTween()
+        }
     }
 
     private func pingFriend(_ friend: TweenFriend) {
+        guard let recipient = friend.messageHandle, !recipient.isEmpty else {
+            pingError = "Add \(friend.name) from Contacts so Tween has a Messages address."
+            return
+        }
+        guard MFMessageComposeViewController.canSendText() else {
+            pingError = "Messages isn't available on this device."
+            return
+        }
+
         PingLog.setPingedAt(friend.id)
         pingTick = Date()
+        ensureLocationForPing { coordinate in
+            let state = TweenState(
+                text: "I'm in",
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude
+            )
+            pendingPing = MessagePing(
+                friendID: friend.id,
+                recipient: recipient,
+                body: Self.pingMessageBody(with: state)
+            )
+        }
+    }
+
+    private func ensureLocationForPing(_ completion: @escaping (CLLocationCoordinate2D) -> Void) {
+        if let savedCoordinate {
+            completion(savedCoordinate)
+            return
+        }
+
+        userClearedLocation = false
+        provider.requestOnce { coordinate in
+            guard let coordinate else {
+                pingError = "Share your location first so Tween can send an I'm in ping."
+                return
+            }
+            savedCoordinate = coordinate
+            completion(coordinate)
+        }
+    }
+
+    private static func pingMessageBody(with state: TweenState) -> String {
+        """
+        I'm in on Tween.
+
+        Open the Tween iMessage app in this chat and tap "I'm in" to share your dot back.
+        \(state.encodedURL().absoluteString)
+        """
+    }
+
+    private func displayHandle(_ handle: String) -> String {
+        if handle.contains("@") { return handle }
+        let digits = handle.filter(\.isNumber)
+        guard digits.count == 10 else { return handle }
+        let area = digits.prefix(3)
+        let middle = digits.dropFirst(3).prefix(3)
+        let last = digits.suffix(4)
+        return "(\(area)) \(middle)-\(last)"
     }
 
     private func beginAdd() {
-        editorName = ""
-        editorMode = .add
+        showContactSearch = true
     }
 
     private func beginRename(_ friend: TweenFriend) {
@@ -1207,8 +1579,6 @@ struct OnboardingView: View {
         let trimmed = editorName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let mode = editorMode else { return }
         switch mode {
-        case .add:
-            friends.append(TweenFriend(name: trimmed))
         case .rename(let target):
             if let index = friends.firstIndex(where: { $0.id == target.id }) {
                 friends[index].name = trimmed
@@ -1216,6 +1586,23 @@ struct OnboardingView: View {
         }
         FriendRoster.save(friends)
         editorMode = nil
+    }
+
+    private func addContactFriend(_ contact: ContactCandidate) {
+        let friend = TweenFriend(
+            name: contact.name,
+            contactIdentifier: contact.contactIdentifier,
+            messageHandle: contact.handle
+        )
+        if let existingIndex = friends.firstIndex(where: { $0.contactIdentifier == contact.contactIdentifier }) {
+            friends[existingIndex] = friend
+        } else if let existingIndex = friends.firstIndex(where: { $0.messageHandle == contact.handle }) {
+            friends[existingIndex] = friend
+        } else {
+            friends.append(friend)
+        }
+        FriendRoster.save(friends)
+        showContactSearch = false
     }
 
     private func deleteFriend(_ friend: TweenFriend) {
@@ -1249,6 +1636,23 @@ struct OnboardingView: View {
         }
     }
 
+    private func selectPlaceFromMap(_ item: MKMapItem) {
+        detailItem = nil
+        selectedPlace = item
+        panelTab = .map
+        let id = placeListID(for: item)
+        requestedPlaceScrollID = nil
+        if let coordinate = item.placemark.location?.coordinate {
+            centerMap(on: coordinate, avoidingBottomOverlay: true)
+        }
+        withAnimation(Tokens.Motion.spring) {
+            panelDetent = panelDetent == .full ? .full : .medium
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            requestedPlaceScrollID = id
+        }
+    }
+
     private func openDetail(_ item: MKMapItem) {
         withAnimation(Tokens.Motion.spring) {
             detailItem = item
@@ -1273,10 +1677,75 @@ struct OnboardingView: View {
         }
     }
 
-    private func openInMaps(_ item: MKMapItem) {
-        item.openInMaps(launchOptions: [
-            MKLaunchOptionsMapTypeKey: NSNumber(value: MKMapType.standard.rawValue)
-        ])
+    private func openInAppleMaps(_ item: MKMapItem) {
+        guard item.placemark.location?.coordinate != nil else { return }
+
+        let destination = clonedMapItem(from: item)
+        var routeItems: [MKMapItem] = [MKMapItem.forCurrentLocation()]
+
+        if let peerCoordinate {
+            let pickupPlacemark = MKPlacemark(coordinate: peerCoordinate)
+            let pickup = MKMapItem(placemark: pickupPlacemark)
+            pickup.name = "Pickup"
+            routeItems.append(pickup)
+        }
+
+        routeItems.append(destination)
+
+        let didOpen = MKMapItem.openMaps(
+            with: routeItems,
+            launchOptions: [
+                MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDriving,
+                MKLaunchOptionsMapTypeKey: NSNumber(value: MKMapType.standard.rawValue)
+            ]
+        )
+
+        if !didOpen, let url = mapsURL(for: item) {
+            UIApplication.shared.open(url)
+        }
+    }
+
+    private func openInGoogleMaps(_ item: MKMapItem) {
+        guard let url = googleMapsURL(for: item) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func clonedMapItem(from item: MKMapItem) -> MKMapItem {
+        guard let coordinate = item.placemark.location?.coordinate else { return item }
+        let clone = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        clone.name = item.name
+        return clone
+    }
+
+    private func mapsURL(for item: MKMapItem) -> URL? {
+        guard let coordinate = item.placemark.location?.coordinate else { return nil }
+        let label = (item.name ?? "Destination").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Destination"
+        let destination = "\(coordinate.latitude),\(coordinate.longitude)"
+        let query: String
+        if let peerCoordinate {
+            query = "saddr=Current%20Location&daddr=\(peerCoordinate.latitude),\(peerCoordinate.longitude)%20to:\(destination)&dirflg=d"
+        } else {
+            query = "saddr=Current%20Location&daddr=\(destination)&q=\(label)&dirflg=d"
+        }
+        return URL(string: "https://maps.apple.com/?\(query)")
+    }
+
+    private func googleMapsURL(for item: MKMapItem) -> URL? {
+        guard let coordinate = item.placemark.location?.coordinate else { return nil }
+        var components = URLComponents(string: "https://www.google.com/maps/dir/")
+        var queryItems = [
+            URLQueryItem(name: "api", value: "1"),
+            URLQueryItem(name: "origin", value: "Current Location"),
+            URLQueryItem(name: "destination", value: "\(coordinate.latitude),\(coordinate.longitude)"),
+            URLQueryItem(name: "travelmode", value: "driving")
+        ]
+
+        if let peerCoordinate {
+            queryItems.append(URLQueryItem(name: "waypoints", value: "\(peerCoordinate.latitude),\(peerCoordinate.longitude)"))
+        }
+
+        components?.queryItems = queryItems
+        return components?.url
     }
 
     /// Stages the chosen spot in the App Group container and opens Messages. The iMessage
@@ -1298,17 +1767,40 @@ struct OnboardingView: View {
         }
     }
 
+    private func copyLink(for item: MKMapItem) {
+        guard let coordinate = item.placemark.location?.coordinate else { return }
+        let state = TweenState(
+            text: "Meet at \(item.name ?? "this spot")",
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude
+        )
+        UIPasteboard.general.string = Self.groupShareText(
+            placeName: item.name ?? "this spot",
+            state: state
+        )
+        copyConfirmation = "Tween link copied. Paste it into any group chat."
+    }
+
+    private static func groupShareText(placeName: String, state: TweenState) -> String {
+        """
+        Meet at \(placeName) on Tween.
+
+        Open the Tween iMessage app in this chat and tap "I'm in" so everyone can compare dots.
+        \(state.encodedURL().absoluteString)
+        """
+    }
+
     private func leaveTween() {
+        userClearedLocation = true
         LocationCache.clearAll()
         savedCoordinate = nil
         peerCoordinate = nil
         selectedPlace = nil
         searchResults = []
+        rankedSpots = []
         searchError = nil
         provider = LocationProvider()
-        withAnimation(Tokens.Motion.gentle) {
-            position = .region(Self.defaultFramedRegion)
-        }
+        withAnimation(Tokens.Motion.spring) { panelDetent = .medium }
     }
 
     private func setMapDisplayMode(_ mode: MapDisplayMode) {
@@ -1362,7 +1854,9 @@ struct OnboardingView: View {
     /// the map smoothly updates from "where I was last time" to "where I am now." Never
     /// triggers the system permission prompt — that stays a deliberate user tap.
     private func silentlyRefreshLocationIfAuthorized() {
+        guard !userClearedLocation else { return }
         provider.requestOnceIfAuthorized { coordinate in
+            guard !userClearedLocation else { return }
             guard let coordinate else { return }
             savedCoordinate = coordinate
             focusOnPeople()
@@ -1375,6 +1869,8 @@ struct OnboardingView: View {
         if latestReply != lastReplyAt { lastReplyAt = latestReply }
         let latestSaved = LocationCache.load()
         let latestPeer = LocationCache.loadPeer()
+        if userClearedLocation, latestSaved == nil, latestPeer == nil { return }
+        if latestSaved != nil || latestPeer != nil { userClearedLocation = false }
         let peerJustAppeared = peerCoordinate == nil && latestPeer != nil
         // Only mutate @State when the value actually changed. Optional<CLLocationCoordinate2D>
         // isn't Equatable, so SwiftUI can't dedupe identical writes — without these guards the
@@ -1436,17 +1932,22 @@ struct OnboardingView: View {
         }
     }
 
-    private func searchPlaces() {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var activeSearchRegion: MKCoordinateRegion {
+        if let region = region(containing: [savedCoordinate, displayPeerCoordinate].compactMap { $0 }, padding: 1.4, minimumDelta: 0.04) {
+            return region
+        }
+        return lastVisibleRegion
+    }
+
+    private func searchPlaces(query explicitQuery: String? = nil) {
+        let query = (explicitQuery ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
 
         searchError = nil
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
         request.resultTypes = [.pointOfInterest]
-        if let region = region(containing: [savedCoordinate, displayPeerCoordinate].compactMap { $0 }, padding: 1.4, minimumDelta: 0.04) {
-            request.region = region
-        }
+        request.region = activeSearchRegion
 
         let a = savedCoordinate
         let b = peerCoordinate
@@ -1930,6 +2431,369 @@ private enum ShareIntent: Identifiable {
     var id: String { String(describing: self) }
 }
 
+private struct MessagePing: Identifiable {
+    let id = UUID()
+    let friendID: UUID
+    let recipient: String
+    let body: String
+}
+
+private struct ContactCandidate: Identifiable, Equatable {
+    let id: String
+    let contactIdentifier: String
+    let name: String
+    let handle: String
+
+    var searchableText: String {
+        "\(name) \(handle)".lowercased()
+    }
+}
+
+private struct ContactSearchSheet: View {
+    let existingFriends: [TweenFriend]
+    let onSelect: (ContactCandidate) -> Void
+    let onCancel: () -> Void
+
+    @StateObject private var index = ContactIndex()
+    @State private var query = ""
+
+    private var filteredContacts: [ContactCandidate] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return index.contacts }
+        return index.contacts.filter { $0.searchableText.contains(trimmed) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: Tokens.Space.s3) {
+                HStack(spacing: Tokens.Space.s2) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    TextField("Search contacts", text: $query)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.search)
+                    if !query.isEmpty {
+                        Button {
+                            query = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, Tokens.Space.s3)
+                .frame(height: 48)
+                .tweenGlass(cornerRadius: Tokens.Radius.chip)
+
+                Group {
+                    switch index.state {
+                    case .idle, .loading:
+                        VStack(spacing: Tokens.Space.s3) {
+                            ProgressView()
+                            Text("Indexing your contacts")
+                                .font(Tokens.Typography.callout)
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .denied:
+                        contactsPermissionState
+                    case .loaded:
+                        contactResults
+                    case let .failed(message):
+                        VStack(spacing: Tokens.Space.s3) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 30, weight: .bold))
+                                .foregroundStyle(Tokens.Palette.warning)
+                            Text(message)
+                                .font(Tokens.Typography.callout)
+                                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                                .multilineTextAlignment(.center)
+                            Button("Try again") {
+                                index.load()
+                            }
+                            .buttonStyle(.tweenPrimary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            }
+            .padding(Tokens.Space.s4)
+            .navigationTitle("Add from Contacts")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+        .onAppear { index.load() }
+    }
+
+    private var contactResults: some View {
+        ScrollView {
+            LazyVStack(spacing: Tokens.Space.s2) {
+                if filteredContacts.isEmpty {
+                    VStack(spacing: Tokens.Space.s2) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 34, weight: .regular))
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        Text(query.isEmpty ? "No contacts with a phone or email" : "No matching contacts")
+                            .font(Tokens.Typography.callout)
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                    }
+                    .padding(.top, Tokens.Space.s8)
+                }
+
+                ForEach(filteredContacts) { contact in
+                    let alreadyAdded = existingFriends.contains {
+                        $0.contactIdentifier == contact.contactIdentifier || $0.messageHandle == contact.handle
+                    }
+                    Button {
+                        onSelect(contact)
+                    } label: {
+                        HStack(spacing: Tokens.Space.s3) {
+                            ZStack {
+                                Circle().fill(Tokens.Palette.brandMuted)
+                                Text(initials(for: contact.name))
+                                    .font(Tokens.Typography.captionEmphasized)
+                                    .foregroundStyle(Tokens.Palette.brand)
+                            }
+                            .frame(width: 38, height: 38)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(contact.name)
+                                    .font(Tokens.Typography.headline)
+                                    .foregroundStyle(Tokens.Palette.onSurface)
+                                Text(displayHandle(contact.handle))
+                                    .font(Tokens.Typography.caption)
+                                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                            }
+                            Spacer()
+                            if alreadyAdded {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Tokens.Palette.success)
+                            }
+                        }
+                        .padding(Tokens.Space.s3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                                .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(alreadyAdded)
+                }
+            }
+        }
+    }
+
+    private var contactsPermissionState: some View {
+        VStack(spacing: Tokens.Space.s3) {
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                .font(.system(size: 34, weight: .regular))
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            Text("Contacts access is off")
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(Tokens.Palette.onSurface)
+            Text("Turn on Contacts so Tween can find the person you want to ping.")
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                .multilineTextAlignment(.center)
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            .buttonStyle(.tweenPrimary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func initials(for name: String) -> String {
+        let letters = name.split(whereSeparator: { $0.isWhitespace }).prefix(2).compactMap(\.first).map(String.init).joined()
+        return letters.isEmpty ? "?" : letters.uppercased()
+    }
+
+    private func displayHandle(_ handle: String) -> String {
+        if handle.contains("@") { return handle }
+        let digits = handle.filter(\.isNumber)
+        guard digits.count == 10 else { return handle }
+        return "(\(digits.prefix(3))) \(digits.dropFirst(3).prefix(3))-\(digits.suffix(4))"
+    }
+}
+
+private final class ContactIndex: ObservableObject {
+    enum State: Equatable {
+        case idle
+        case loading
+        case loaded
+        case denied
+        case failed(String)
+    }
+
+    @Published var state: State = .idle
+    @Published var contacts: [ContactCandidate] = []
+
+    private let store = CNContactStore()
+
+    func load() {
+        state = .loading
+        switch CNContactStore.authorizationStatus(for: .contacts) {
+        case .authorized, .limited:
+            fetchContacts()
+        case .notDetermined:
+            store.requestAccess(for: .contacts) { [weak self] granted, _ in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.fetchContacts()
+                    } else {
+                        self?.state = .denied
+                    }
+                }
+            }
+        case .denied, .restricted:
+            state = .denied
+        @unknown default:
+            state = .denied
+        }
+    }
+
+    private func fetchContacts() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let keys: [CNKeyDescriptor] = [
+                CNContactIdentifierKey as CNKeyDescriptor,
+                CNContactGivenNameKey as CNKeyDescriptor,
+                CNContactFamilyNameKey as CNKeyDescriptor,
+                CNContactOrganizationNameKey as CNKeyDescriptor,
+                CNContactPhoneNumbersKey as CNKeyDescriptor,
+                CNContactEmailAddressesKey as CNKeyDescriptor
+            ]
+            let request = CNContactFetchRequest(keysToFetch: keys)
+            var candidates: [ContactCandidate] = []
+
+            do {
+                try self.store.enumerateContacts(with: request) { contact, _ in
+                    guard let handle = Self.preferredHandle(for: contact) else { return }
+                    let name = Self.displayName(for: contact)
+                    guard !name.isEmpty else { return }
+                    candidates.append(ContactCandidate(
+                        id: "\(contact.identifier)-\(handle)",
+                        contactIdentifier: contact.identifier,
+                        name: name,
+                        handle: handle
+                    ))
+                }
+
+                let sorted = candidates.sorted {
+                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+                DispatchQueue.main.async {
+                    self.contacts = sorted
+                    self.state = .loaded
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.state = .failed("Tween couldn't read Contacts. Try again in a second.")
+                }
+            }
+        }
+    }
+
+    private static func displayName(for contact: CNContact) -> String {
+        let combined = [contact.givenName, contact.familyName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if !combined.isEmpty { return combined }
+        return contact.organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func preferredHandle(for contact: CNContact) -> String? {
+        if let phone = contact.phoneNumbers.first?.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+           !phone.isEmpty {
+            return phone
+        }
+        if let email = contact.emailAddresses.first?.value as String?,
+           !email.isEmpty {
+            return email
+        }
+        return nil
+    }
+}
+
+private struct MessageComposeSheet: UIViewControllerRepresentable {
+    let recipients: [String]
+    let body: String
+    let onFinish: () -> Void
+
+    func makeUIViewController(context: Context) -> MFMessageComposeViewController {
+        let controller = MFMessageComposeViewController()
+        controller.recipients = recipients
+        controller.body = body
+        controller.messageComposeDelegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: MFMessageComposeViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFinish: onFinish)
+    }
+
+    final class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
+        let onFinish: () -> Void
+
+        init(onFinish: @escaping () -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func messageComposeViewController(
+            _ controller: MFMessageComposeViewController,
+            didFinishWith result: MessageComposeResult
+        ) {
+            controller.dismiss(animated: true) {
+                self.onFinish()
+            }
+        }
+    }
+}
+
+private final class SearchCompleter: NSObject, ObservableObject, MKLocalSearchCompleterDelegate {
+    @Published var suggestions: [MKLocalSearchCompletion] = []
+
+    var region: MKCoordinateRegion = OnboardingView.defaultFramedRegion {
+        didSet { completer.region = region }
+    }
+
+    var queryFragment: String = "" {
+        didSet {
+            completer.queryFragment = queryFragment
+            if queryFragment.isEmpty {
+                suggestions = []
+            }
+        }
+    }
+
+    private let completer = MKLocalSearchCompleter()
+
+    override init() {
+        super.init()
+        completer.delegate = self
+        completer.resultTypes = [.pointOfInterest, .query]
+    }
+
+    func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
+        suggestions = Array(completer.results.prefix(10))
+    }
+
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
+        suggestions = []
+    }
+}
+
 /// Google-Maps-style category presets. Phase-2 scope is UI-only — tapping a chip pre-fills
 /// the search field but does not trigger `searchPlaces()`. Wiring lands in a later slice.
 private enum CategoryPreset: String, CaseIterable, Identifiable {
@@ -1975,25 +2839,22 @@ private enum CategoryPreset: String, CaseIterable, Identifiable {
 }
 
 private enum FriendEditor: Identifiable {
-    case add
     case rename(TweenFriend)
 
     var id: String {
         switch self {
-        case .add: "add"
         case .rename(let friend): friend.id.uuidString
         }
     }
 
     var alertTitle: String {
         switch self {
-        case .add: "Add friend"
         case .rename: "Rename friend"
         }
     }
 }
 
-private enum PanelDetent {
+private enum PanelDetent: CaseIterable {
     case peek
     case medium
     case full
@@ -2015,6 +2876,82 @@ private enum PanelDetent {
     }
 }
 
+private struct PlaceSnapshotThumbnail: View {
+    let item: MKMapItem
+    let tint: Color
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .fill(Tokens.Palette.brandMuted)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .transition(.opacity)
+            } else {
+                Image(systemName: "map.fill")
+                    .font(Tokens.Typography.title)
+                    .foregroundStyle(tint)
+            }
+
+            VStack {
+                Spacer()
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.45)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 42)
+            }
+
+            Image(systemName: "mappin.circle.fill")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(.white, tint)
+                .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
+        }
+        .frame(width: 104, height: 104)
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous))
+        .task(id: item.hash) {
+            image = await Self.snapshot(for: item, tint: UIColor(tint))
+        }
+        .animation(Tokens.Motion.gentle, value: image)
+    }
+
+    @MainActor
+    private static func snapshot(for item: MKMapItem, tint: UIColor) async -> UIImage? {
+        guard let coordinate = item.placemark.location?.coordinate else { return nil }
+        let options = MKMapSnapshotter.Options()
+        options.size = CGSize(width: 312, height: 312)
+        options.scale = UIScreen.main.scale
+        options.mapType = .standard
+        options.region = MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006)
+        )
+
+        do {
+            let snapshot = try await MKMapSnapshotter(options: options).start()
+            let renderer = UIGraphicsImageRenderer(size: options.size)
+            return renderer.image { _ in
+                snapshot.image.draw(at: .zero)
+                let point = snapshot.point(for: coordinate)
+                let halo = CGRect(x: point.x - 18, y: point.y - 18, width: 36, height: 36)
+                tint.withAlphaComponent(0.22).setFill()
+                UIBezierPath(ovalIn: halo).fill()
+                UIColor.white.setFill()
+                UIBezierPath(ovalIn: halo.insetBy(dx: 7, dy: 7)).fill()
+                tint.setFill()
+                UIBezierPath(ovalIn: halo.insetBy(dx: 11, dy: 11)).fill()
+            }
+        } catch {
+            return nil
+        }
+    }
+}
+
 /// Simplified search-result row: category symbol pill, name, type label, dual-ETA chip.
 /// The whole row is tappable (handled by the caller); selection state shifts to a
 /// brand-tinted background + thin brand border.
@@ -2031,49 +2968,50 @@ private struct ResultRow: View {
     let namespace: Namespace.ID
 
     var body: some View {
-        HStack(alignment: .center, spacing: Tokens.Space.s3) {
-            ZStack {
-                Circle()
-                    .fill(isTopPick ? Tokens.Palette.brand : categoryTint)
-                Image(systemName: symbol)
-                    .font(Tokens.Typography.captionEmphasized)
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 36, height: 36)
-            .matchedGeometryEffect(id: matchedSymbolId(for: item), in: namespace)
+        HStack(alignment: .top, spacing: Tokens.Space.s3) {
+            PlaceSnapshotThumbnail(item: item, tint: isTopPick ? Tokens.Palette.brand : categoryTint)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name ?? "Place")
-                    .font(Tokens.Typography.headline)
-                    .foregroundStyle(Tokens.Palette.onSurface)
-                    .lineLimit(1)
-                    .matchedGeometryEffect(id: matchedNameId(for: item), in: namespace)
-                Text(typeLabel)
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-                    .lineLimit(1)
-            }
+            VStack(alignment: .leading, spacing: Tokens.Space.s2) {
+                HStack(alignment: .top, spacing: Tokens.Space.s2) {
+                    ZStack {
+                        Circle()
+                            .fill(isTopPick ? Tokens.Palette.brand : categoryTint)
+                        Image(systemName: symbol)
+                            .font(Tokens.Typography.captionEmphasized)
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 32, height: 32)
+                    .matchedGeometryEffect(id: matchedSymbolId(for: item), in: namespace)
 
-            Spacer(minLength: Tokens.Space.s2)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name ?? "Place")
+                            .font(Tokens.Typography.headline)
+                            .foregroundStyle(Tokens.Palette.onSurface)
+                            .lineLimit(2)
+                            .matchedGeometryEffect(id: matchedNameId(for: item), in: namespace)
+                        Text(displayAddress)
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                            .lineLimit(2)
+                    }
+                }
 
-            if let ranked {
-                ETAChip(
-                    selfValue: formatETA(ranked.etaFromA),
-                    friendValue: formatETA(ranked.etaFromB),
-                    isBalanced: isBalanced(ranked)
-                )
-                .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
-            } else {
-                ETAChip(
-                    selfValue: youDistance ?? "—",
-                    friendValue: friendDistance ?? "—",
-                    isBalanced: false
-                )
-                .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
+                HStack(spacing: Tokens.Space.s2) {
+                    Text(typeLabel)
+                        .font(Tokens.Typography.captionEmphasized)
+                        .foregroundStyle(categoryTint)
+                        .lineLimit(1)
+
+                    Spacer(minLength: Tokens.Space.s1)
+
+                    etaChip
+                        .matchedGeometryEffect(id: matchedChipId(for: item), in: namespace)
+                }
             }
         }
         .padding(.horizontal, Tokens.Space.s3)
         .padding(.vertical, Tokens.Space.s3)
+        .frame(minHeight: 128)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
@@ -2086,6 +3024,44 @@ private struct ResultRow: View {
                     lineWidth: isSelected ? 1.5 : 1
                 )
         }
+    }
+
+    @ViewBuilder
+    private var etaChip: some View {
+        if let ranked {
+            ETAChip(
+                selfValue: formatETA(ranked.etaFromA),
+                friendValue: formatETA(ranked.etaFromB),
+                isBalanced: isBalanced(ranked)
+            )
+        } else {
+            ETAChip(
+                selfValue: youDistance ?? "-",
+                friendValue: friendDistance ?? "-",
+                isBalanced: false
+            )
+        }
+    }
+
+    private var displayAddress: String {
+        let placemark = item.placemark
+        let parts = [
+            placemark.subThoroughfare,
+            placemark.thoroughfare,
+            placemark.locality,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+        if !parts.isEmpty {
+            return parts.joined(separator: " ")
+        }
+
+        if let title = placemark.title, title != item.name {
+            return title
+        }
+
+        return "Address unavailable"
     }
 
     private func formatETA(_ seconds: TimeInterval) -> String {
@@ -2118,7 +3094,9 @@ private struct SpotDetail: View {
     let namespace: Namespace.ID
     let onShowOnMap: () -> Void
     let onSendToChat: () -> Void
-    let onOpenInMaps: () -> Void
+    let onCopyLink: () -> Void
+    let onOpenInAppleMaps: () -> Void
+    let onOpenInGoogleMaps: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -2185,6 +3163,14 @@ private struct SpotDetail: View {
                 }
                 .buttonStyle(.tweenPrimary)
 
+                Button(action: onCopyLink) {
+                    HStack {
+                        Image(systemName: "link")
+                        Text("Copy link")
+                    }
+                }
+                .buttonStyle(.tweenSubtle)
+
                 Button(action: onShowOnMap) {
                     HStack {
                         Image(systemName: "scope")
@@ -2193,10 +3179,18 @@ private struct SpotDetail: View {
                 }
                 .buttonStyle(.tweenSubtle)
 
-                Button(action: onOpenInMaps) {
+                Button(action: onOpenInAppleMaps) {
                     HStack {
                         Image(systemName: "arrow.up.right.square")
-                        Text("Open in Maps")
+                        Text("Open in Apple Maps")
+                    }
+                }
+                .buttonStyle(.tweenSubtle)
+
+                Button(action: onOpenInGoogleMaps) {
+                    HStack {
+                        Image(systemName: "globe")
+                        Text("Open in Google Maps")
                     }
                 }
                 .buttonStyle(.tweenSubtle)
