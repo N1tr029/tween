@@ -18,6 +18,7 @@ struct OnboardingView: View {
     @State private var provider = LocationProvider()
     @State private var savedCoordinate = LocationCache.load()
     @State private var peerCoordinate = LocationCache.loadPeer()
+    @State private var isUserIn = LocationCache.isActive()
     @State private var searchText = ""
     @State private var searchResults: [MKMapItem] = []
     @State private var rankedSpots: [RankedSpot] = []
@@ -31,6 +32,7 @@ struct OnboardingView: View {
     @State private var panelDragStartHeight: CGFloat?
     @State private var userClearedLocation = false
     @State private var requestedPlaceScrollID: String?
+    @State private var keyboardHeight: CGFloat = 0
 
     /// The country-level fallback region used on a fresh launch (no cached coordinate)
     /// and as the seed for `lastVisibleRegion` before the user pans. Continental US.
@@ -76,6 +78,7 @@ struct OnboardingView: View {
         ZStack(alignment: .top) {
             styledMap
                 .ignoresSafeArea()
+                .simultaneousGesture(mapCollapseGesture)
 
             VStack {
                 HStack {
@@ -91,7 +94,7 @@ struct OnboardingView: View {
                 Spacer()
                 bottomPanel
             }
-            .ignoresSafeArea(edges: .bottom)
+            .ignoresSafeArea(.container, edges: .bottom)
 
             if showTutorial {
                 tutorialOverlay
@@ -104,6 +107,20 @@ struct OnboardingView: View {
         }
         .task {
             await pollSharedLocations()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
+            updateKeyboardHeight(from: notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { notification in
+            updateKeyboardHeight(from: notification)
+        }
+        .onChange(of: searchFocused) { _, focused in
+            guard focused else { return }
+            withAnimation(Tokens.Motion.spring) {
+                panelDetent = .full
+                livePanelHeight = nil
+                panelDragStartHeight = nil
+            }
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [Self.inviteMessage])
@@ -154,7 +171,7 @@ struct OnboardingView: View {
         Map(position: $position, bounds: MapCameraBounds(minimumDistance: 200, maximumDistance: 2_000_000)) {
                 if let coordinate = savedCoordinate {
                     Annotation("You", coordinate: coordinate) {
-                        TweenPin(role: .selfDot)
+                        TweenPin(role: isUserIn ? .selfActive : .selfDot)
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
@@ -298,6 +315,13 @@ struct OnboardingView: View {
                 .submitLabel(.search)
                 .focused($searchFocused)
                 .onSubmit { commitSearch() }
+                .toolbar {
+                    ToolbarItem(placement: .keyboard) {
+                        if searchFocused {
+                            keyboardPanelPicker
+                        }
+                    }
+                }
 
             if !searchText.isEmpty {
                 Button {
@@ -307,8 +331,12 @@ struct OnboardingView: View {
                     selectedPlace = nil
                     searchError = nil
                     searchCompleter.queryFragment = ""
-                    panelDetent = .medium
-                    focusOnPeople()
+                    if searchFocused {
+                        withAnimation(Tokens.Motion.spring) { panelDetent = .full }
+                    } else {
+                        panelDetent = .medium
+                        focusOnPeople()
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Tokens.Palette.onSurfaceMuted)
@@ -448,22 +476,32 @@ struct OnboardingView: View {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
-                        if !monitor.isOnline {
-                            offlineBanner
-                        }
+                            if !monitor.isOnline {
+                                offlineBanner
+                            }
 
-                        searchBar
-                        categoryChipRow
-                        searchSuggestionsList
+                            if searchFocused {
+                                Color.clear
+                                    .frame(height: Tokens.Space.s4)
+                            }
 
-                        panelTitleRow
-                        panelPicker
+                            searchBar
+                                .id("sheet-search")
+                            categoryChipRow
+                            searchSuggestionsList
+
+                            if !searchFocused {
+                                panelTitleRow
+                                panelPicker
+                            }
 
                             if panelDetent != .full, panelTab == .map {
                                 statusView
                             }
 
-                            panelContent
+                            if !searchFocused {
+                                panelContent
+                            }
                         }
                         .padding(.horizontal, Tokens.Space.s5)
                         .padding(.top, Tokens.Space.s2)
@@ -475,6 +513,12 @@ struct OnboardingView: View {
                         guard let id else { return }
                         withAnimation(Tokens.Motion.spring) {
                             proxy.scrollTo(id, anchor: .center)
+                        }
+                    }
+                    .onChange(of: searchFocused) { _, focused in
+                        guard focused else { return }
+                        DispatchQueue.main.async {
+                            proxy.scrollTo("sheet-search", anchor: .top)
                         }
                     }
                 }
@@ -551,15 +595,20 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Button(action: togglePanelDetent) {
-                Image(systemName: panelDetent == .full ? "chevron.down" : "chevron.up")
-                    .font(Tokens.Typography.headline.weight(.bold))
-                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            if searchFocused {
+                Color.clear
                     .frame(width: 40, height: 40)
-                    .background(Tokens.Palette.surface.opacity(0.7), in: Circle())
+            } else {
+                Button(action: togglePanelDetent) {
+                    Image(systemName: panelDetent == .full ? "chevron.down" : "chevron.up")
+                        .font(Tokens.Typography.headline.weight(.bold))
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .frame(width: 40, height: 40)
+                        .background(Tokens.Palette.surface.opacity(0.7), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(panelDetent == .full ? "Collapse sheet" : "Expand sheet")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(panelDetent == .full ? "Collapse sheet" : "Expand sheet")
         }
         .frame(height: 54)
     }
@@ -587,9 +636,9 @@ struct OnboardingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("About Tween")
 
-            Image(systemName: savedCoordinate == nil ? "mappin.and.ellipse" : "checkmark.circle.fill")
+            Image(systemName: isUserIn ? "checkmark.circle.fill" : "location.circle.fill")
                 .font(Tokens.Typography.title)
-                .foregroundStyle(savedCoordinate == nil ? Tokens.Palette.onSurfaceMuted : Tokens.Palette.success)
+                .foregroundStyle(isUserIn ? Tokens.Palette.success : Tokens.Palette.pinSelf)
         }
     }
 
@@ -600,6 +649,39 @@ struct OnboardingView: View {
             }
         }
         .pickerStyle(.segmented)
+    }
+
+    private var keyboardPanelPicker: some View {
+        HStack(spacing: 0) {
+            keyboardPanelButton(.map)
+            keyboardPanelButton(.waiting)
+        }
+        .padding(4)
+        .frame(width: max(0, UIScreen.main.bounds.width - 40), height: 50)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Map and Waiting tabs")
+    }
+
+    private func keyboardPanelButton(_ tab: HomePanelTab) -> some View {
+        let isSelected = panelTab == tab
+
+        return Button {
+            withAnimation(Tokens.Motion.spring) {
+                panelTab = tab
+            }
+        } label: {
+            Text(tab.title)
+                .font(Tokens.Typography.headline.weight(.semibold))
+                .foregroundStyle(isSelected ? Tokens.Palette.onSurface : Tokens.Palette.onSurfaceMuted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+                        .fill(isSelected ? Tokens.Palette.onSurface.opacity(0.16) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -652,6 +734,7 @@ struct OnboardingView: View {
     }
 
     private var shouldShowActionControls: Bool {
+        !searchFocused &&
         panelDetent != .full &&
         panelTab == .map &&
         detailItem == nil &&
@@ -660,7 +743,9 @@ struct OnboardingView: View {
     }
 
     private var scrollContentBottomPadding: CGFloat {
-        shouldShowActionControls ? Tokens.Space.s3 : bottomSafeAreaInset + Tokens.Space.s4
+        let keyboardPadding = keyboardHeight > 0 ? keyboardHeight + Tokens.Space.s4 : 0
+        let basePadding = shouldShowActionControls ? Tokens.Space.s3 : bottomSafeAreaInset + Tokens.Space.s4
+        return max(basePadding, keyboardPadding)
     }
 
     private func togglePanelDetent() {
@@ -673,6 +758,18 @@ struct OnboardingView: View {
             case .full:
                 panelDetent = .medium
             }
+        }
+    }
+
+    private func collapsePanelForMapInteraction() {
+        guard searchFocused || panelDetent != .peek || livePanelHeight != nil else { return }
+
+        withAnimation(Tokens.Motion.spring) {
+            searchFocused = false
+            panelTab = .map
+            panelDetent = .peek
+            livePanelHeight = nil
+            panelDragStartHeight = nil
         }
     }
 
@@ -816,6 +913,13 @@ struct OnboardingView: View {
             }
     }
 
+    private var mapCollapseGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { _ in
+                collapsePanelForMapInteraction()
+            }
+    }
+
     private static let peekHeight: CGFloat = 120
 
     private var panelInteractiveHeight: CGFloat {
@@ -836,7 +940,10 @@ struct OnboardingView: View {
             if !searchResults.isEmpty { return screenHeight * 0.58 }
             return screenHeight * 0.48
         case .full:
-            return screenHeight - 86
+            if keyboardHeight > 0 {
+                return min(screenHeight * 0.68, keyboardHeight + 420)
+            }
+            return screenHeight - 120
         }
     }
 
@@ -846,6 +953,25 @@ struct OnboardingView: View {
             .flatMap(\.windows)
             .first { $0.isKeyWindow }?
             .safeAreaInsets.bottom ?? 0
+    }
+
+    private func updateKeyboardHeight(from notification: Notification) {
+        guard
+            let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        else { return }
+
+        let screenHeight = UIScreen.main.bounds.height
+        let height = max(0, screenHeight - endFrame.minY)
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
+
+        withAnimation(.easeOut(duration: duration)) {
+            keyboardHeight = height
+            if height > 0, searchFocused {
+                panelDetent = .full
+                livePanelHeight = nil
+                panelDragStartHeight = nil
+            }
+        }
     }
 
     private func nearestPanelDetent(to height: CGFloat) -> PanelDetent {
@@ -866,7 +992,7 @@ struct OnboardingView: View {
                 .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
                 .animation(Tokens.Motion.spring, value: peerCoordinate?.latitude)
 
-            if savedCoordinate != nil {
+            if isUserIn {
                 Button(action: leaveTween) {
                     Text("No longer in")
                         .lineLimit(1)
@@ -882,21 +1008,20 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var primaryCTA: some View {
-        if savedCoordinate == nil {
-            HStack(spacing: Tokens.Space.s2 + 2) {
-                Image(systemName: "message.fill")
-                    .foregroundStyle(Tokens.Palette.pinSelf)
-                Text("Waiting for an iMessage “I'm in”")
-                    .font(Tokens.Typography.headline)
-                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-                    .lineLimit(1)
-                    // 52pt status pill, single-line by design.
-                    // Tighten rather than clip when Dynamic Type runs large.
-                    .minimumScaleFactor(0.82)
+        if !isUserIn {
+            Button(action: updateMyDot) {
+                HStack(spacing: Tokens.Space.s2) {
+                    if isRequesting {
+                        ProgressView()
+                            .tint(.white)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                    Text("I'm in")
+                        .contentTransition(.numericText())
+                }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(Tokens.Palette.surface, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+            .buttonStyle(.tweenPrimary)
+            .disabled(isRequesting)
         } else if peerCoordinate == nil {
             Button(action: updateMyDot) {
                 HStack(spacing: Tokens.Space.s2) {
@@ -1229,17 +1354,17 @@ struct OnboardingView: View {
             HStack(spacing: Tokens.Space.s2) {
                 if isRequesting {
                     ProgressView()
-                        .tint(savedCoordinate == nil ? .white : Tokens.Palette.brand)
+                        .tint(isUserIn ? Tokens.Palette.brand : .white)
                         .transition(.scale.combined(with: .opacity))
                 }
-                Text(savedCoordinate == nil ? "I'm in" : "No longer in")
+                Text(isUserIn ? "No longer in" : "I'm in")
                     .contentTransition(.numericText())
             }
         }
-        .buttonStyle(savedCoordinate == nil ? .tweenPrimary : .tweenSubtle)
+        .buttonStyle(isUserIn ? .tweenSubtle : .tweenPrimary)
         .disabled(isRequesting)
         .animation(Tokens.Motion.spring, value: isRequesting)
-        .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
+        .animation(Tokens.Motion.spring, value: isUserIn)
     }
 
     private var friendList: some View {
@@ -1358,7 +1483,7 @@ struct OnboardingView: View {
 
     private var waitingSubtitle: String {
         if friends.isEmpty { return "Add the people you're waiting on" }
-        if savedCoordinate == nil { return "Share your location to start" }
+        if !isUserIn { return savedCoordinate == nil ? "Share your location to start" : "Tap I'm in when you're ready" }
         if peerCoordinate == nil { return "Waiting on a reply" }
         return "You and a friend are \(distanceText) apart"
     }
@@ -1410,16 +1535,16 @@ struct OnboardingView: View {
         case .idle:
             if let savedCoordinate {
                 Label(
-                    formatCoordinate(latitude: savedCoordinate.latitude, longitude: savedCoordinate.longitude),
-                    systemImage: "location.fill"
+                    isUserIn ? "You're in" : "Your location is ready",
+                    systemImage: isUserIn ? "checkmark.circle.fill" : "location.fill"
                 )
-                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                .foregroundStyle(isUserIn ? Tokens.Palette.success : Tokens.Palette.onSurfaceMuted)
             }
         case .requesting:
             ProgressView("Getting your location…")
-        case let .got(coordinate):
+        case .got:
             Label(
-                formatCoordinate(latitude: coordinate.latitude, longitude: coordinate.longitude),
+                "Location updated",
                 systemImage: "checkmark.circle.fill"
             )
             .foregroundStyle(Tokens.Palette.success)
@@ -1446,7 +1571,8 @@ struct OnboardingView: View {
     }
 
     private var headlineText: String {
-        guard savedCoordinate != nil else { return "Say “I'm in” from Messages to show your dot" }
+        guard savedCoordinate != nil else { return "Share your location to show your dot" }
+        guard isUserIn else { return "Tap “I'm in” to turn your dot green" }
         guard peerCoordinate != nil else { return "Waiting for the other person" }
         return "Halfway ideas, \(distanceText) apart"
     }
@@ -1475,8 +1601,9 @@ struct OnboardingView: View {
 
     private func updateMyDot() {
         userClearedLocation = false
-        provider.requestOnce { coordinate in
+        provider.requestOnce(activate: true) { coordinate in
             guard let coordinate else { return }
+            isUserIn = true
             savedCoordinate = coordinate
             focusOnPeople()
         }
@@ -1490,6 +1617,8 @@ struct OnboardingView: View {
         }
         pingTick = Date()
         if savedCoordinate != nil {
+            LocationCache.setActive(true)
+            isUserIn = true
             focusOnPeople()
             return
         }
@@ -1497,7 +1626,7 @@ struct OnboardingView: View {
     }
 
     private func toggleGroupLocation() {
-        if savedCoordinate == nil {
+        if !isUserIn {
             imInForGroup()
         } else {
             leaveTween()
@@ -1791,9 +1920,10 @@ struct OnboardingView: View {
     }
 
     private func leaveTween() {
-        userClearedLocation = true
-        LocationCache.clearAll()
-        savedCoordinate = nil
+        userClearedLocation = false
+        LocationCache.setActive(false)
+        LocationCache.clearPeer()
+        isUserIn = false
         peerCoordinate = nil
         selectedPlace = nil
         searchResults = []
@@ -1855,7 +1985,7 @@ struct OnboardingView: View {
     /// triggers the system permission prompt — that stays a deliberate user tap.
     private func silentlyRefreshLocationIfAuthorized() {
         guard !userClearedLocation else { return }
-        provider.requestOnceIfAuthorized { coordinate in
+        provider.requestOnceIfAuthorized(activate: isUserIn) { coordinate in
             guard !userClearedLocation else { return }
             guard let coordinate else { return }
             savedCoordinate = coordinate
@@ -1869,6 +1999,7 @@ struct OnboardingView: View {
         if latestReply != lastReplyAt { lastReplyAt = latestReply }
         let latestSaved = LocationCache.load()
         let latestPeer = LocationCache.loadPeer()
+        let latestIsUserIn = LocationCache.isActive()
         if userClearedLocation, latestSaved == nil, latestPeer == nil { return }
         if latestSaved != nil || latestPeer != nil { userClearedLocation = false }
         let peerJustAppeared = peerCoordinate == nil && latestPeer != nil
@@ -1877,6 +2008,7 @@ struct OnboardingView: View {
         // 1 s poll would re-render the Map every tick even when nothing moved.
         if !sameCoordinate(savedCoordinate, latestSaved) { savedCoordinate = latestSaved }
         if !sameCoordinate(peerCoordinate, latestPeer) { peerCoordinate = latestPeer }
+        if isUserIn != latestIsUserIn { isUserIn = latestIsUserIn }
         // The camera reframes only on explicit intent — first load (forceFocus) or the one-shot
         // moment a peer coordinate first appears. Routine poll-driven data refreshes must never
         // reassign `position` or the user's pan/zoom gets stomped.

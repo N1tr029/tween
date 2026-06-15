@@ -22,6 +22,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     private var completion: ((CLLocationCoordinate2D?) -> Void)?
+    private var nextSaveIsActive = true
 
     override init() {
         super.init()
@@ -31,8 +32,9 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     /// Requests authorization (if needed) and a single location fix. The optional completion
     /// fires once with the coordinate, or nil if denied/failed.
-    func requestOnce(completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
+    func requestOnce(activate: Bool = true, completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
         self.completion = completion
+        nextSaveIsActive = activate
         status = .requesting
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
@@ -51,13 +53,13 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     /// Like `requestOnce`, but a no-op when authorisation is `.notDetermined` / `.denied` /
     /// `.restricted`. Used by the app's launch-time silent refresh — never want to fire the
     /// system permission prompt without an explicit user tap.
-    func requestOnceIfAuthorized(completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
+    func requestOnceIfAuthorized(activate: Bool = false, completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
         let auth = manager.authorizationStatus
         guard auth == .authorizedWhenInUse || auth == .authorizedAlways else {
             completion?(nil)
             return
         }
-        requestOnce(completion: completion)
+        requestOnce(activate: activate, completion: completion)
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -78,7 +80,7 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let coordinate = locations.last?.coordinate else { return }
-        LocationCache.save(coordinate)
+        LocationCache.save(coordinate, isActive: nextSaveIsActive)
         status = .got(coordinate)
         complete(with: coordinate)
     }

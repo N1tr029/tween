@@ -6,6 +6,7 @@ import SwiftUI
 struct TweenPin: View {
     enum Role {
         case selfDot
+        case selfActive
         case friend
         case midpoint
     }
@@ -38,7 +39,7 @@ struct TweenPin: View {
     /// `midpoint` keeps the circle — it's already differentiated by size, star, and pulse.
     private var halo: AnyShape {
         switch role {
-        case .selfDot, .midpoint:
+        case .selfDot, .selfActive, .midpoint:
             return AnyShape(Circle())
         case .friend:
             return AnyShape(RoundedRectangle(cornerRadius: outerSize * 0.30, style: .continuous))
@@ -48,6 +49,7 @@ struct TweenPin: View {
     private var tint: Color {
         switch role {
         case .selfDot:  return Tokens.Palette.pinSelf
+        case .selfActive: return Tokens.Palette.success
         case .friend:   return Tokens.Palette.pinFriend
         case .midpoint: return Tokens.Palette.pinMidpoint
         }
@@ -56,6 +58,7 @@ struct TweenPin: View {
     private var symbol: String {
         switch role {
         case .selfDot:  return "person.fill"
+        case .selfActive: return "checkmark"
         case .friend:   return "person.2.fill"
         case .midpoint: return "star.fill"
         }

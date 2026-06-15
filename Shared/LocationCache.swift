@@ -26,20 +26,29 @@ enum LocationCache {
 
     /// The cached coordinate, or nil if none has been stored yet.
     static func load() -> CLLocationCoordinate2D? {
-        guard let defaults, defaults.bool(forKey: Key.isActive), defaults.object(forKey: Key.latitude) != nil else { return nil }
+        guard let defaults, defaults.object(forKey: Key.latitude) != nil else { return nil }
         return CLLocationCoordinate2D(
             latitude: defaults.double(forKey: Key.latitude),
             longitude: defaults.double(forKey: Key.longitude)
         )
     }
 
+    static func isActive() -> Bool {
+        defaults?.bool(forKey: Key.isActive) ?? false
+    }
+
     /// Persists the coordinate (overwriting any previous one) with a capture timestamp.
-    static func save(_ coordinate: CLLocationCoordinate2D) {
+    static func save(_ coordinate: CLLocationCoordinate2D, isActive: Bool = true) {
         guard let defaults else { return }
-        defaults.set(true, forKey: Key.isActive)
+        defaults.set(isActive, forKey: Key.isActive)
         defaults.set(coordinate.latitude, forKey: Key.latitude)
         defaults.set(coordinate.longitude, forKey: Key.longitude)
         defaults.set(Date().timeIntervalSince1970, forKey: Key.timestamp)
+    }
+
+    static func setActive(_ isActive: Bool) {
+        guard let defaults else { return }
+        defaults.set(isActive, forKey: Key.isActive)
     }
 
     static func loadPeer() -> CLLocationCoordinate2D? {
@@ -59,7 +68,7 @@ enum LocationCache {
 
     static func clear() {
         guard let defaults else { return }
-        [Key.isActive, Key.latitude, Key.longitude, Key.timestamp].forEach(defaults.removeObject(forKey:))
+        defaults.set(false, forKey: Key.isActive)
     }
 
     static func clearPeer() {
