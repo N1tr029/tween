@@ -90,11 +90,9 @@ struct OnboardingView: View {
                 Spacer()
             }
 
-            VStack {
-                Spacer()
+            NativePanelSheet(panelDetent: $panelDetent) {
                 bottomPanel
             }
-            .ignoresSafeArea(.container, edges: .bottom)
 
             if showTutorial {
                 tutorialOverlay
@@ -121,27 +119,6 @@ struct OnboardingView: View {
                 livePanelHeight = nil
                 panelDragStartHeight = nil
             }
-        }
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: [Self.inviteMessage])
-        }
-        .sheet(isPresented: $showContactSearch) {
-            ContactSearchSheet(
-                existingFriends: friends,
-                onSelect: addContactFriend,
-                onCancel: { showContactSearch = false }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        .sheet(item: $pendingPing) { ping in
-            MessageComposeSheet(
-                recipients: [ping.recipient],
-                body: ping.body,
-                onFinish: {
-                    pendingPing = nil
-                }
-            )
         }
         .alert(
             "Can't send ping",
@@ -537,23 +514,28 @@ struct OnboardingView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: panelInteractiveHeight, alignment: .top)
-        .background {
-            UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
-                .fill(.regularMaterial)
-                .overlay {
-                    UnevenRoundedRectangle(topLeadingRadius: Tokens.Radius.sheet, topTrailingRadius: Tokens.Radius.sheet)
-                        .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
-                }
-        }
-        .tweenElevation(Tokens.Elevation.sheet)
-        .transaction { transaction in
-            if livePanelHeight != nil {
-                transaction.animation = nil
-            }
-        }
-        .animation(Tokens.Motion.spring, value: panelDetent)
         .animation(Tokens.Motion.spring, value: monitor.isOnline)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: [Self.inviteMessage])
+        }
+        .sheet(isPresented: $showContactSearch) {
+            ContactSearchSheet(
+                existingFriends: friends,
+                onSelect: addContactFriend,
+                onCancel: { showContactSearch = false }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $pendingPing) { ping in
+            MessageComposeSheet(
+                recipients: [ping.recipient],
+                body: ping.body,
+                onFinish: {
+                    pendingPing = nil
+                }
+            )
+        }
         .alert(
             editorMode?.alertTitle ?? "",
             isPresented: Binding(
@@ -729,7 +711,6 @@ struct OnboardingView: View {
         dragHandle
             .frame(width: 150, height: 48)
             .contentShape(Rectangle())
-            .highPriorityGesture(panelDragGesture)
             .onTapGesture(perform: togglePanelDetent)
     }
 
@@ -889,28 +870,6 @@ struct OnboardingView: View {
     private func formatPeekETA(_ seconds: TimeInterval) -> String {
         let minutes = Int((seconds / 60).rounded())
         return "\(minutes)m"
-    }
-
-    private var panelDragGesture: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .onChanged { value in
-                let startHeight = panelDragStartHeight ?? height(for: panelDetent)
-                panelDragStartHeight = startHeight
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    livePanelHeight = clampedPanelHeight(startHeight - value.translation.height)
-                }
-            }
-            .onEnded { value in
-                let startHeight = panelDragStartHeight ?? height(for: panelDetent)
-                let targetHeight = startHeight - value.predictedEndTranslation.height
-                withAnimation(Tokens.Motion.spring) {
-                    panelDetent = nearestPanelDetent(to: targetHeight)
-                    livePanelHeight = nil
-                    panelDragStartHeight = nil
-                }
-            }
     }
 
     private var mapCollapseGesture: some Gesture {
@@ -3005,6 +2964,53 @@ private enum PanelDetent: CaseIterable {
         case .medium: .peek
         case .full: .medium
         }
+    }
+}
+
+private struct NativePanelSheet<SheetContent: View>: View {
+    @Binding var panelDetent: PanelDetent
+    @State private var selectedDetent: PresentationDetent = .medium
+    @ViewBuilder let content: () -> SheetContent
+
+    private static var peekDetent: PresentationDetent { .height(120) }
+    private static var detents: Set<PresentationDetent> { [Self.peekDetent, .medium, .large] }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .sheet(isPresented: .constant(true)) {
+                content()
+                    .presentationDetents(Self.detents, selection: $selectedDetent)
+                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                    .presentationContentInteraction(.scrolls)
+                    .interactiveDismissDisabled()
+                    .presentationDragIndicator(.visible)
+            }
+            .onChange(of: panelDetent) { _, detent in
+                let target = Self.sheetDetent(for: detent)
+                guard selectedDetent != target else { return }
+                selectedDetent = target
+            }
+            .onChange(of: selectedDetent) { _, detent in
+                let target = Self.panelDetent(for: detent)
+                guard panelDetent != target else { return }
+                panelDetent = target
+            }
+    }
+
+    private static func sheetDetent(for detent: PanelDetent) -> PresentationDetent {
+        switch detent {
+        case .peek: Self.peekDetent
+        case .medium: .medium
+        case .full: .large
+        }
+    }
+
+    private static func panelDetent(for detent: PresentationDetent) -> PanelDetent {
+        if detent == Self.peekDetent { return .peek }
+        if detent == .large { return .full }
+        return .medium
     }
 }
 
