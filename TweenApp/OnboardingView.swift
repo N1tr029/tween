@@ -471,7 +471,9 @@ struct OnboardingView: View {
     }
 
     private var bottomPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let isShowingDetail = panelTab == .map && detailItem != nil
+
+        return VStack(alignment: .leading, spacing: 0) {
             sheetHeader
                 .padding(.horizontal, Tokens.Space.s5)
                 .padding(.top, searchResults.isEmpty ? Tokens.Space.s3 : Tokens.Space.s2)
@@ -488,22 +490,24 @@ struct OnboardingView: View {
                                 offlineBanner
                             }
 
-                            if isSearchModeVisible {
+                            if isSearchModeVisible && !isShowingDetail {
                                 Color.clear
                                     .frame(height: Tokens.Space.s4)
                             }
 
-                            searchBar
-                                .id("sheet-search")
-                            categoryChipRow
-                            searchSuggestionsList
+                            if !isShowingDetail {
+                                searchBar
+                                    .id("sheet-search")
+                                categoryChipRow
+                                searchSuggestionsList
+                            }
 
-                            if !isSearchModeVisible {
+                            if !isSearchModeVisible && !isShowingDetail {
                                 panelTitleRow
                                 panelPicker
                             }
 
-                            if panelDetent != .full, panelTab == .map {
+                            if panelDetent != .full, panelTab == .map, !isShowingDetail {
                                 statusView
                             }
 
@@ -794,9 +798,14 @@ struct OnboardingView: View {
             case .medium:
                 panelDetent = .full
             case .full:
-                panelDetent = .medium
+                isSearchActive = false
+                searchFocused = false
+                detailItem = nil
+                panelTab = .map
+                panelDetent = .peek
             }
         }
+        refreshPanelContent()
     }
 
     private func collapsePanelForMapInteraction() {
@@ -805,12 +814,13 @@ struct OnboardingView: View {
         withAnimation(Tokens.Motion.spring) {
             searchFocused = false
             isSearchActive = false
-            refreshPanelContent()
+            detailItem = nil
             panelTab = .map
             panelDetent = .peek
             livePanelHeight = nil
             panelDragStartHeight = nil
         }
+        refreshPanelContent()
     }
 
     private var offlineBanner: some View {
@@ -1783,13 +1793,13 @@ struct OnboardingView: View {
 
     private func selectPlaceOnMap(_ item: MKMapItem) {
         selectedPlace = item
-        refreshPanelContent()
         if let coordinate = item.placemark.location?.coordinate {
             centerMap(on: coordinate, avoidingBottomOverlay: true)
         }
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .peek
         }
+        refreshPanelContent()
     }
 
     private func selectPlaceFromMap(_ item: MKMapItem) {
@@ -1806,7 +1816,9 @@ struct OnboardingView: View {
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .medium
         }
-        refreshPanelContent()
+        DispatchQueue.main.async {
+            refreshPanelContent()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             requestedPlaceScrollID = id
         }
@@ -1831,12 +1843,18 @@ struct OnboardingView: View {
             selectedPlace = item
             panelDetent = .peek
         }
+        refreshPanelContent()
     }
 
     private func closeDetail() {
         withAnimation(Tokens.Motion.spring) {
             detailItem = nil
+            isSearchActive = false
+            searchFocused = false
+            panelTab = .map
+            panelDetent = searchResults.isEmpty ? .peek : .medium
         }
+        refreshPanelContent()
     }
 
     private func openInAppleMaps(_ item: MKMapItem) {

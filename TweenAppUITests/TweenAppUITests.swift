@@ -34,6 +34,39 @@ final class TweenAppUITests: XCTestCase {
     }
 
     @MainActor
+    func testCloseDetailReturnsToPlaceResults() {
+        let app = launchApp("-TweenUITestResults")
+
+        let row = app.buttons["place-row-Starbucks Coffee"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+
+        XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
+        app.buttons["Close detail"].tap()
+
+        XCTAssertTrue(app.staticTexts["Places"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 1))
+    }
+
+    @MainActor
+    func testCollapseButtonEscapesFullDetail() {
+        let app = launchApp("-TweenUITestResults")
+
+        let row = app.buttons["place-row-Starbucks Coffee"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
+
+        XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))
+        app.buttons["Expand sheet"].tap()
+        XCTAssertTrue(app.buttons["Collapse sheet"].waitForExistence(timeout: 5))
+        app.buttons["Collapse sheet"].tap()
+
+        XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 1))
+    }
+
+    @MainActor
     func testWaitingTabShowsFriendControls() {
         let app = launchApp("-TweenUITestWaiting")
 
