@@ -2,42 +2,64 @@
 //  TweenAppUITests.swift
 //  TweenAppUITests
 //
-//  Created by Kavi Gandham on 6/6/26.
-//
 
 import XCTest
 
 final class TweenAppUITests: XCTestCase {
-
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testSearchSuggestionsRenderWhileTyping() {
+        let app = launchApp("-TweenUITestSearch")
+
+        XCTAssertTrue(app.textFields["Search coffee, lunch, parks..."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Search for “h”"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testPlaceResultsAndDetailRender() {
+        let app = launchApp("-TweenUITestResults")
+
+        XCTAssertTrue(app.staticTexts["Places"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Starbucks Coffee"].waitForExistence(timeout: 5))
+
+        let row = app.buttons["place-row-Starbucks Coffee"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+
+        XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Copy link"].exists)
+    }
+
+    @MainActor
+    func testWaitingTabShowsFriendControls() {
+        let app = launchApp("-TweenUITestWaiting")
+
+        XCTAssertTrue(app.staticTexts["Waiting"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Maya Ahmed"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["No longer in"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Invite friends to Tween"].exists)
+    }
+
+    @MainActor
+    func testMapPinTapOpensPlaceDetail() {
+        let app = launchApp("-TweenUITestMapPin")
+
+        let pin = app.buttons["map-place-Starbucks Coffee"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5))
+        pin.tap()
+
+        XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Open in Google Maps"].exists)
+    }
+
+    @MainActor
+    private func launchApp(_ state: String) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchArguments = ["-TweenUITestState", state]
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-    }
-
-    @MainActor
-    func testLaunchPerformance() throws {
-        if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
-            // This measures how long it takes to launch your application.
-            measure(metrics: [XCTApplicationLaunchMetric()]) {
-                XCUIApplication().launch()
-            }
-        }
+        return app
     }
 }
