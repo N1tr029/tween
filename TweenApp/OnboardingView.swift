@@ -129,7 +129,11 @@ struct OnboardingView: View {
                 panelDragStartHeight = nil
             }
         }
-        .onReceive(searchCompleter.$suggestions) { _ in
+        .onChange(of: panelDetent) { oldDetent, newDetent in
+            guard oldDetent == .full, newDetent != .full, isSearchModeVisible else { return }
+            searchFocused = false
+            isSearchActive = false
+            searchCompleter.queryFragment = ""
             refreshPanelContent()
         }
         .alert(
@@ -354,7 +358,6 @@ struct OnboardingView: View {
             if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 isSearchActive = true
             }
-            refreshPanelContent()
             updateSearchSuggestions(for: newValue)
         }
     }
@@ -370,7 +373,6 @@ struct OnboardingView: View {
             selectedPlace = nil
             searchError = nil
             searchCompleter.queryFragment = ""
-            refreshPanelContent()
             return
         }
         isSearchActive = true
@@ -379,7 +381,6 @@ struct OnboardingView: View {
         selectedPlace = nil
         detailItem = nil
         searchError = nil
-        refreshPanelContent()
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
@@ -391,7 +392,6 @@ struct OnboardingView: View {
                 searchError = nil
                 searchCompleter.region = activeSearchRegion
                 searchCompleter.queryFragment = trimmed
-                refreshPanelContent()
             }
         }
     }
@@ -549,6 +549,8 @@ struct OnboardingView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .simultaneousGesture(panelExitDragGesture)
         .animation(Tokens.Motion.spring, value: monitor.isOnline)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [Self.inviteMessage])
@@ -602,32 +604,20 @@ struct OnboardingView: View {
     }
 
     private var sheetHeader: some View {
-        HStack(spacing: Tokens.Space.s2) {
-            Color.clear
-                .frame(width: 40, height: 40)
-
+        HStack {
             Spacer()
 
-            dragZone
-
-            Spacer()
-
-            if searchFocused {
-                Color.clear
+            Button(action: togglePanelDetent) {
+                Image(systemName: panelDetent == .full ? "chevron.down" : "chevron.up")
+                    .font(Tokens.Typography.headline.weight(.bold))
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .frame(width: 40, height: 40)
-            } else {
-                Button(action: togglePanelDetent) {
-                    Image(systemName: panelDetent == .full ? "chevron.down" : "chevron.up")
-                        .font(Tokens.Typography.headline.weight(.bold))
-                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-                        .frame(width: 40, height: 40)
-                        .background(Tokens.Palette.surface.opacity(0.7), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(panelDetent == .full ? "Collapse sheet" : "Expand sheet")
+                    .background(Tokens.Palette.surface.opacity(0.7), in: Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(panelDetent == .full ? "Collapse sheet" : "Expand sheet")
         }
-        .frame(height: 54)
+        .frame(height: 48)
     }
 
     private var panelTitleRow: some View {
@@ -747,19 +737,6 @@ struct OnboardingView: View {
         }
     }
 
-    private var dragHandle: some View {
-        Capsule()
-            .fill(Tokens.Palette.onSurfaceMuted.opacity(0.35))
-            .frame(width: 42, height: 5)
-    }
-
-    private var dragZone: some View {
-        dragHandle
-            .frame(width: 150, height: 48)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: togglePanelDetent)
-    }
-
     private var shouldShowActionControls: Bool {
         !isSearchModeVisible &&
         !searchFocused &&
@@ -778,6 +755,16 @@ struct OnboardingView: View {
         guard panelTab == .map else { return false }
         if isSearchActive || searchFocused { return true }
         return !trimmedSearchText.isEmpty && searchResults.isEmpty && detailItem == nil
+    }
+
+    private var panelExitDragGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .global)
+            .onEnded { value in
+                guard panelDetent == .full else { return }
+                guard value.translation.height > 70 else { return }
+                guard abs(value.translation.width) < value.translation.height else { return }
+                collapsePanelForMapInteraction()
+            }
     }
 
     private func refreshPanelContent() {
@@ -1055,7 +1042,7 @@ struct OnboardingView: View {
         } else {
             Button {
                 withAnimation(Tokens.Motion.spring) {
-                    panelDetent = .medium
+                    panelDetent = .full
                 }
                 searchFocused = true
             } label: {
@@ -3173,7 +3160,7 @@ private struct NativePanelSheet<SheetContent: View>: View {
                     .id(contentRevision)
                     .presentationDetents(Self.detents, selection: $selectedDetent)
                     .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                    .presentationContentInteraction(.scrolls)
+                    .presentationContentInteraction(.resizes)
                     .interactiveDismissDisabled()
                     .presentationDragIndicator(.visible)
             }

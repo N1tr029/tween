@@ -19,6 +19,32 @@ final class TweenAppUITests: XCTestCase {
     }
 
     @MainActor
+    func testSearchModeCanCollapseBackToMap() {
+        let app = launchApp("-TweenUITestSearch")
+
+        XCTAssertTrue(app.staticTexts["Search for “h”"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Collapse sheet"].waitForExistence(timeout: 5))
+        app.buttons["Collapse sheet"].tap()
+
+        XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Search for “h”"].waitForExistence(timeout: 1))
+    }
+
+    @MainActor
+    func testSearchModeDragDownLeavesSearch() {
+        let app = launchApp("-TweenUITestSearch")
+
+        XCTAssertTrue(app.staticTexts["Search for “h”"].waitForExistence(timeout: 5))
+
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        start.press(forDuration: 0.1, thenDragTo: end)
+
+        XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Search for “h”"].waitForExistence(timeout: 1))
+    }
+
+    @MainActor
     func testPlaceResultsAndDetailRender() {
         let app = launchApp("-TweenUITestResults")
 
