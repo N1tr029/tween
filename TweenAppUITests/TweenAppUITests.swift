@@ -35,9 +35,11 @@ final class TweenAppUITests: XCTestCase {
         let app = launchApp("-TweenUITestSearch")
 
         XCTAssertTrue(app.staticTexts["Search for “h”"].waitForExistence(timeout: 5))
+        let handle = app.buttons["Collapse sheet"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
 
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = start.withOffset(CGVector(dx: 0, dy: 360))
         start.press(forDuration: 0.1, thenDragTo: end)
 
         XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))

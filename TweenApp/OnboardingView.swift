@@ -131,9 +131,9 @@ struct OnboardingView: View {
         }
         .onChange(of: panelDetent) { oldDetent, newDetent in
             guard oldDetent == .full, newDetent != .full, isSearchModeVisible else { return }
+            clearSearchModeState()
             searchFocused = false
             isSearchActive = false
-            searchCompleter.queryFragment = ""
             refreshPanelContent()
         }
         .alert(
@@ -771,6 +771,16 @@ struct OnboardingView: View {
         panelContentRevision &+= 1
     }
 
+    private func clearSearchModeState() {
+        searchText = ""
+        searchResults = []
+        rankedSpots = []
+        selectedPlace = nil
+        detailItem = nil
+        searchError = nil
+        searchCompleter.queryFragment = ""
+    }
+
     private var scrollContentBottomPadding: CGFloat {
         let keyboardPadding = keyboardHeight > 0 ? keyboardHeight + Tokens.Space.s4 : 0
         let basePadding = shouldShowActionControls ? Tokens.Space.s3 : bottomSafeAreaInset + Tokens.Space.s4
@@ -778,6 +788,7 @@ struct OnboardingView: View {
     }
 
     private func togglePanelDetent() {
+        let shouldClearSearch = isSearchModeVisible
         withAnimation(Tokens.Motion.spring) {
             switch panelDetent {
             case .peek:
@@ -785,6 +796,9 @@ struct OnboardingView: View {
             case .medium:
                 panelDetent = .full
             case .full:
+                if shouldClearSearch {
+                    clearSearchModeState()
+                }
                 isSearchActive = false
                 searchFocused = false
                 detailItem = nil
@@ -797,8 +811,12 @@ struct OnboardingView: View {
 
     private func collapsePanelForMapInteraction() {
         guard searchFocused || isSearchActive || panelDetent != .peek || livePanelHeight != nil else { return }
+        let shouldClearSearch = isSearchModeVisible
 
         withAnimation(Tokens.Motion.spring) {
+            if shouldClearSearch {
+                clearSearchModeState()
+            }
             searchFocused = false
             isSearchActive = false
             detailItem = nil
