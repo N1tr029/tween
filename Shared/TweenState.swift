@@ -62,7 +62,14 @@ extension TweenState {
     }
 
     /// Decodes state from a message URL. Returns nil if required items are missing or invalid.
+    /// Receiver-side defense for the CLAUDE.md hard constraints — MSMessage.url is supposed
+    /// to be ≤ 5000 chars and use https or file scheme. A non-conforming URL means something
+    /// upstream broke our contract; treat it as untrusted.
     init?(url: URL) {
+        guard url.absoluteString.count <= 5000 else { return nil }
+        guard let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "file"
+        else { return nil }
         guard
             let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
             let items = components.queryItems

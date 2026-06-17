@@ -51,6 +51,7 @@ final class MessagesViewController: MSMessagesAppViewController {
     private var isRequesting = false
     private var rankedSpots: [RankedSpot] = []
     private var rankingTask: Task<Void, Never>?
+    private var sendTask: Task<Void, Never>?
     private let locationProvider = LocationProvider()
     private var pendingDraft: OutgoingDraft?
     private var sentMessageCount: Int = 0
@@ -77,8 +78,21 @@ final class MessagesViewController: MSMessagesAppViewController {
         super.willTransition(to: presentationStyle)
         if presentationStyle == .expanded {
             kickOffRanking()
+        } else {
+            // Once we're going compact, ranking results have nowhere to render —
+            // drop the in-flight MKLocalSearch + MKDirections calls to free memory.
+            rankingTask?.cancel()
         }
         presentUI()
+    }
+
+    override func willResignActive(with conversation: MSConversation) {
+        super.willResignActive(with: conversation)
+        // Extension is being dismissed; release any in-flight work so the appex
+        // doesn't keep burning memory and rate-limited MapKit quota past the user's
+        // exit. CLAUDE.md: extension memory is tight.
+        rankingTask?.cancel()
+        sendTask?.cancel()
     }
 
     override func didReceive(_ message: MSMessage, conversation: MSConversation) {
@@ -258,12 +272,14 @@ final class MessagesViewController: MSMessagesAppViewController {
         let chosen = rankedSpots.first
         let sessionFromTap = conversation.selectedMessage?.session
 
-        Task { [weak self] in
+        sendTask?.cancel()
+        sendTask = Task { [weak self] in
             let bubbleImage = await BubbleImageRenderer.makeImage(
                 selfCoord: selfCoord,
                 peer: peer,
                 chosenSpot: chosen
             )
+            if Task.isCancelled { return }
             await MainActor.run {
                 guard let self else { return }
                 self.insertBubble(

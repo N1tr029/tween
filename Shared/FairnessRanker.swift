@@ -68,12 +68,25 @@ enum FairnessRanker {
         async let etaA = eta(from: a, to: destination)
         async let etaB = eta(from: b, to: destination)
         let (resolvedA, resolvedB) = await (etaA, etaB)
-        guard let etaA = resolvedA, let etaB = resolvedB else { return nil }
+
+        // Both routes failed — no usable signal, drop the candidate.
+        if resolvedA == nil && resolvedB == nil { return nil }
+
+        let baseConfidence = confidence(for: item)
+        if let etaA = resolvedA, let etaB = resolvedB {
+            return RankedSpot(item: item, etaFromA: etaA, etaFromB: etaB, confidence: baseConfidence)
+        }
+
+        // Exactly one side failed (rate-limit, no driving route, transient). Keep the
+        // candidate with a padded estimate for the missing leg and halved confidence
+        // so fully-measured spots still outrank it.
+        let knownETA = resolvedA ?? resolvedB ?? 0
+        let estimatedETA = knownETA + max(knownETA * 0.5, 60)
         return RankedSpot(
             item: item,
-            etaFromA: etaA,
-            etaFromB: etaB,
-            confidence: confidence(for: item)
+            etaFromA: resolvedA ?? estimatedETA,
+            etaFromB: resolvedB ?? estimatedETA,
+            confidence: baseConfidence * 0.5
         )
     }
 

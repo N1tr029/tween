@@ -20,8 +20,18 @@ enum PingLog {
         UserDefaults(suiteName: suiteName)
     }
 
+    /// Serializes the read-modify-write cycle inside this process so concurrent calls
+    /// (e.g. group-imIn stamping every friend in parallel + a fast individual Ping tap)
+    /// can't lose updates. Cross-process atomicity is provided by the App Group container
+    /// itself; the queue only protects within-process interleaving.
+    private static let queue = DispatchQueue(label: "com.kavigandham.tween.pinglog", qos: .userInitiated)
+
     /// All per-friend timestamps. Returns an empty dictionary when unset.
     static func loadAll() -> [UUID: Date] {
+        queue.sync { loadAllUnsafe() }
+    }
+
+    private static func loadAllUnsafe() -> [UUID: Date] {
         guard let defaults, let data = defaults.data(forKey: Key.pingedAt) else { return [:] }
         guard let raw = try? JSONDecoder().decode([String: Date].self, from: data) else { return [:] }
         var out: [UUID: Date] = [:]
@@ -32,22 +42,26 @@ enum PingLog {
     }
 
     static func pingedAt(_ id: UUID) -> Date? {
-        loadAll()[id]
+        queue.sync { loadAllUnsafe()[id] }
     }
 
     static func setPingedAt(_ id: UUID, date: Date = Date()) {
-        var current = loadAll()
-        current[id] = date
-        save(current)
+        queue.sync {
+            var current = loadAllUnsafe()
+            current[id] = date
+            saveUnsafe(current)
+        }
     }
 
     static func clearPing(_ id: UUID) {
-        var current = loadAll()
-        current.removeValue(forKey: id)
-        save(current)
+        queue.sync {
+            var current = loadAllUnsafe()
+            current.removeValue(forKey: id)
+            saveUnsafe(current)
+        }
     }
 
-    private static func save(_ map: [UUID: Date]) {
+    private static func saveUnsafe(_ map: [UUID: Date]) {
         guard let defaults else { return }
         var raw: [String: Date] = [:]
         for (id, date) in map { raw[id.uuidString] = date }

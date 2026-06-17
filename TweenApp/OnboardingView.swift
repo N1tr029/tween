@@ -76,6 +76,7 @@ struct OnboardingView: View {
             _friends         = State(initialValue: friends)
         }
         _pendingDebugSeed    = State(initialValue: seed)
+        _didDebugLaunch      = State(initialValue: true)
     }
     @State private var mapDisplayMode: MapDisplayMode = .standard
     @State private var showsTraffic = false
@@ -105,6 +106,12 @@ struct OnboardingView: View {
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
     @State private var pendingDebugSeed: DebugLaunchSeed?
+    /// `true` for the entire lifetime of a `-TweenUITest*` launch — `pendingDebugSeed` is
+    /// consumed after the side-effects pass, but this flag stays set so all subsequent
+    /// disk-read paths (refreshSavedLocation, pollSharedLocations, silentlyRefresh…)
+    /// keep their hands off the user's real caches. Without it, the 1Hz poll clobbers
+    /// the in-memory @State seeded by `init()` with empty/stale cache contents.
+    @State private var didDebugLaunch = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -654,7 +661,7 @@ struct OnboardingView: View {
         .simultaneousGesture(panelExitDragGesture)
         .animation(Tokens.Motion.spring, value: monitor.isOnline)
         .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: [Self.inviteMessage])
+            ShareSheet(items: [Self.inviteMessage], onDismiss: { showShareSheet = false })
         }
         .sheet(isPresented: $showContactSearch) {
             ContactSearchSheet(
@@ -669,7 +676,13 @@ struct OnboardingView: View {
             MessageComposeSheet(
                 recipients: [ping.recipient],
                 body: ping.body,
-                onFinish: {
+                onFinish: { result in
+                    // Stamp the ping log only when the message actually went out.
+                    // Cancelled / failed composes leave the friend's subtitle untouched.
+                    if result == .sent {
+                        PingLog.setPingedAt(ping.friendID)
+                        pingTick = Date()
+                    }
                     pendingPing = nil
                 }
             )
@@ -1981,8 +1994,6 @@ struct OnboardingView: View {
             return
         }
 
-        PingLog.setPingedAt(friend.id)
-        pingTick = Date()
         ensureLocationForPing { coordinate in
             let state = TweenState(
                 text: "I'm in",
@@ -2336,7 +2347,7 @@ struct OnboardingView: View {
     /// triggers the system permission prompt — that stays a deliberate user tap.
     private func silentlyRefreshLocationIfAuthorized() {
         guard !userClearedLocation else { return }
-        guard pendingDebugSeed == nil else { return }
+        guard !didDebugLaunch else { return }
         provider.requestOnceIfAuthorized(activate: isUserIn) { coordinate in
             guard !userClearedLocation else { return }
             guard let coordinate else { return }
@@ -2346,11 +2357,14 @@ struct OnboardingView: View {
     }
 
     private func refreshSavedLocation(forceFocus: Bool = false) {
-        // Skip while a debug-launch seed is still pending: this function reads from
-        // FriendRoster / LocationCache, but those caches don't get written until the
-        // side-effects pass runs. Reading early would clobber the @State seeded by init().
-        guard pendingDebugSeed == nil else { return }
-        friends = FriendRoster.load()
+        // Skip entirely for a -TweenUITest* launch: the seeded @State is the source of
+        // truth, and `applyDebugLaunchSideEffectsIfNeeded` deliberately doesn't pollute
+        // the real LocationCache / FriendRoster. Reading either would clobber the seed.
+        guard !didDebugLaunch else { return }
+        // NOTE: friends are NOT reloaded from FriendRoster on poll. Friend changes are
+        // user-driven (add/rename/remove), which already update @State + FriendRoster
+        // together. Reloading every second clobbers in-memory state without ever
+        // picking up a meaningful change.
         let latestReply = PingLog.lastIncomingReplyAt
         if latestReply != lastReplyAt { lastReplyAt = latestReply }
         let latestSaved = LocationCache.load()
@@ -2727,22 +2741,19 @@ struct OnboardingView: View {
             .joined(separator: " ")
     }
 
-    /// Runs the side effects that can't be expressed via `State(initialValue:)` in `init()`:
-    /// App Group writes, FriendRoster persistence, and the post-render camera reframe. The
-    /// seeded @State itself has already been applied by `init()` — this function only fires
-    /// the I/O that has to wait until the view is on screen. Consuming `pendingDebugSeed`
-    /// guarantees it runs at most once even if `.onAppear` fires twice (scene re-activation).
+    /// Runs the post-render side effects for a UI-test launch. The seeded @State itself is
+    /// already applied by `init()` (see DebugLaunchSeed). Crucially we do NOT persist the
+    /// seeded friends/coordinates to FriendRoster / LocationCache — that pollution survives
+    /// the test process and shows up in the user's real roster afterwards (the "Maya Ahmed
+    /// debug-maya" ghost). `refreshSavedLocation` / `silentlyRefreshLocationIfAuthorized`
+    /// already guard on `pendingDebugSeed`, so prepareInitialMap can't read empty caches
+    /// and clobber the in-memory seeded state. Consuming `pendingDebugSeed` guarantees this
+    /// runs at most once even on scene re-activation.
     private func applyDebugLaunchSideEffectsIfNeeded() {
         guard let seed = pendingDebugSeed else { return }
         pendingDebugSeed = nil
 
         OnboardingFlags.hasSeenOnboarding = true
-        LocationCache.save(seed.savedCoordinate)
-        LocationCache.savePeer(seed.peerCoordinate)
-        LocationCache.setActive(true)
-        if let friends = seed.friends {
-            FriendRoster.save(friends)
-        }
         if seed.shouldFocusPlacesAndPeople {
             focusOnPlacesAndPeople()
         }
@@ -2920,11 +2931,19 @@ private struct LocationShareSheet: View {
 }
 
 /// Thin SwiftUI wrapper around `UIActivityViewController` for the invite-friend share sheet.
+/// Hooks `completionWithItemsHandler` so the SwiftUI sheet dismisses after the user picks
+/// an activity (sent, cancelled, or copied) — without it the sheet stays presented after
+/// "Messages → Send" and only swipe-down dismisses it.
 private struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    let onDismiss: () -> Void
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            onDismiss()
+        }
+        return controller
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
@@ -3373,7 +3392,7 @@ private final class ContactIndex: ObservableObject {
 private struct MessageComposeSheet: UIViewControllerRepresentable {
     let recipients: [String]
     let body: String
-    let onFinish: () -> Void
+    let onFinish: (MessageComposeResult) -> Void
 
     func makeUIViewController(context: Context) -> MFMessageComposeViewController {
         let controller = MFMessageComposeViewController()
@@ -3390,9 +3409,9 @@ private struct MessageComposeSheet: UIViewControllerRepresentable {
     }
 
     final class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
-        let onFinish: () -> Void
+        let onFinish: (MessageComposeResult) -> Void
 
-        init(onFinish: @escaping () -> Void) {
+        init(onFinish: @escaping (MessageComposeResult) -> Void) {
             self.onFinish = onFinish
         }
 
@@ -3401,7 +3420,7 @@ private struct MessageComposeSheet: UIViewControllerRepresentable {
             didFinishWith result: MessageComposeResult
         ) {
             controller.dismiss(animated: true) {
-                self.onFinish()
+                self.onFinish(result)
             }
         }
     }

@@ -21,7 +21,10 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     private(set) var status: Status = .idle
 
     private let manager = CLLocationManager()
-    private var completion: ((CLLocationCoordinate2D?) -> Void)?
+    /// Queue of pending completions. Multiple concurrent `requestOnce` callers (e.g. a
+    /// quick double-tap on "Share my location") all get the same coordinate when it
+    /// arrives, rather than the first caller's closure silently being discarded.
+    private var pendingCompletions: [(CLLocationCoordinate2D?) -> Void] = []
     private var nextSaveIsActive = true
 
     override init() {
@@ -33,7 +36,9 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     /// Requests authorization (if needed) and a single location fix. The optional completion
     /// fires once with the coordinate, or nil if denied/failed.
     func requestOnce(activate: Bool = true, completion: ((CLLocationCoordinate2D?) -> Void)? = nil) {
-        self.completion = completion
+        if let completion {
+            pendingCompletions.append(completion)
+        }
         nextSaveIsActive = activate
         status = .requesting
         switch manager.authorizationStatus {
@@ -91,8 +96,8 @@ final class LocationProvider: NSObject, CLLocationManagerDelegate {
     }
 
     private func complete(with coordinate: CLLocationCoordinate2D?) {
-        let handler = completion
-        completion = nil
-        handler?(coordinate)
+        let handlers = pendingCompletions
+        pendingCompletions.removeAll()
+        handlers.forEach { $0(coordinate) }
     }
 }
