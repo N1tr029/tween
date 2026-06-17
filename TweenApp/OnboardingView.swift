@@ -46,12 +46,36 @@ struct OnboardingView: View {
     private static let neighbourhoodSpan = MKCoordinateSpan(latitudeDelta: 0.025, longitudeDelta: 0.025)
 
     init() {
-        let cached = LocationCache.load()
+        let seed = DebugLaunchSeed.resolve()
+
+        let cached = seed?.savedCoordinate ?? LocationCache.load()
         let initialRegion = cached.map {
             MKCoordinateRegion(center: $0, span: Self.neighbourhoodSpan)
         } ?? Self.defaultFramedRegion
         _position = State(initialValue: .region(initialRegion))
         _lastVisibleRegion = State(initialValue: initialRegion)
+
+        guard let seed else { return }
+
+        // Seed every relevant @State backing storage *before* the first body render so
+        // the .sheet host captures the seeded values on initial presentation. Setting
+        // these later (e.g. in .onAppear) races the UIHostingController and the sheet
+        // ends up showing empty content for the seeded UI-test launch modes.
+        _searchText          = State(initialValue: seed.searchText)
+        _searchResults       = State(initialValue: seed.searchResults)
+        _selectedPlace       = State(initialValue: seed.selectedPlace)
+        _isSearchActive      = State(initialValue: seed.isSearchActive)
+        _panelTab            = State(initialValue: seed.panelTab)
+        _panelDetent         = State(initialValue: seed.panelDetent)
+        _selectedSheetDetent = State(initialValue: Self.sheetDetent(for: seed.panelDetent))
+        _savedCoordinate     = State(initialValue: seed.savedCoordinate)
+        _peerCoordinate      = State(initialValue: seed.peerCoordinate)
+        _isUserIn            = State(initialValue: true)
+        _showTutorial        = State(initialValue: false)
+        if let friends = seed.friends {
+            _friends         = State(initialValue: friends)
+        }
+        _pendingDebugSeed    = State(initialValue: seed)
     }
     @State private var mapDisplayMode: MapDisplayMode = .standard
     @State private var showsTraffic = false
@@ -71,15 +95,16 @@ struct OnboardingView: View {
     @State private var pingTick = Date()
     @State private var lastReplyAt: Date? = PingLog.lastIncomingReplyAt
     @State private var searchTask: Task<Void, Never>?
+    @State private var placesSearchTask: Task<Void, Never>?
+    @State private var isApplyingProgrammaticSearch = false
+    @State private var lastCompleterRegionCenter: CLLocationCoordinate2D?
     @StateObject private var searchCompleter = SearchCompleter()
     @State private var isSearchActive = false
-    @State private var panelContentRevision = 0
     @State private var didCollapseWithPanelDrag = false
     @State private var selectedSheetDetent: PresentationDetent = .medium
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
-    @State private var didApplyDebugLaunchState = false
-    @State private var isApplyingDebugLaunchState = false
+    @State private var pendingDebugSeed: DebugLaunchSeed?
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -103,7 +128,6 @@ struct OnboardingView: View {
                 .allowsHitTesting(false)
                 .sheet(isPresented: .constant(true)) {
                     bottomPanel
-                        .id(panelContentRevision)
                         .presentationDetents(Self.sheetDetents, selection: $selectedSheetDetent)
                         .presentationBackground(.regularMaterial)
                         .presentationCornerRadius(34)
@@ -119,7 +143,7 @@ struct OnboardingView: View {
         }
         .onAppear {
             prepareInitialMap()
-            applyDebugLaunchStateIfNeeded()
+            applyDebugLaunchSideEffectsIfNeeded()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
@@ -137,21 +161,22 @@ struct OnboardingView: View {
         .onChange(of: searchFocused) { _, focused in
             guard focused else { return }
             isSearchActive = true
-            refreshPanelContent()
             withAnimation(Tokens.Motion.spring) {
                 panelDetent = .full
                 livePanelHeight = nil
                 panelDragStartHeight = nil
             }
         }
-        .onChange(of: panelDetent) { oldDetent, newDetent in
+        .onChange(of: panelDetent) { _, newDetent in
             let target = Self.sheetDetent(for: newDetent)
             if selectedSheetDetent != target {
                 selectedSheetDetent = target
             }
-            guard oldDetent == .full, newDetent != .full, searchFocused else { return }
+            // Dismiss the keyboard whenever the sheet leaves .full — including the
+            // .medium → .peek drag, where leaving focus mounted would strand the
+            // keyboard over a 120pt sheet.
+            guard newDetent != .full, searchFocused else { return }
             searchFocused = false
-            refreshPanelContent()
         }
         .onChange(of: selectedSheetDetent) { _, detent in
             let target = Self.panelDetent(for: detent)
@@ -229,6 +254,7 @@ struct OnboardingView: View {
             }
             .onMapCameraChange(frequency: .continuous) { context in
                 lastVisibleRegion = context.region
+                refreshSearchCompleterRegionIfNeeded(context.region)
             }
             .animation(Tokens.Motion.spring, value: searchResults.count)
             .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
@@ -344,7 +370,6 @@ struct OnboardingView: View {
                     searchCompleter.queryFragment = ""
                     if isSearchActive || searchFocused {
                         isSearchActive = true
-                        refreshPanelContent()
                         withAnimation(Tokens.Motion.spring) { panelDetent = .full }
                     } else {
                         panelDetent = .medium
@@ -364,7 +389,6 @@ struct OnboardingView: View {
         .tweenGlass(cornerRadius: Tokens.Radius.chip)
         .onTapGesture {
             isSearchActive = true
-            refreshPanelContent()
             searchFocused = true
             if panelDetent != .full {
                 withAnimation(Tokens.Motion.spring) {
@@ -375,10 +399,13 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: searchText) { _, newValue in
-            guard !isApplyingDebugLaunchState else { return }
+            // commitSearch / selectCategory mutate searchText to drive `searchPlaces` directly.
+            // If we ran updateSearchSuggestions here too, two MKLocalSearches would race for
+            // the same query — the slower one stomps the faster one's results. Skip when the
+            // programmatic path is in flight; the typed path still flows normally.
+            guard !isApplyingProgrammaticSearch else { return }
             if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 isSearchActive = true
-                refreshPanelContent()
                 if panelDetent != .full {
                     withAnimation(Tokens.Motion.spring) {
                         panelDetent = .full
@@ -414,7 +441,6 @@ struct OnboardingView: View {
         searchCompleter.region = region
         searchCompleter.queryFragment = trimmed
         isSearchingPlaces = true
-        refreshPanelContent()
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -440,9 +466,23 @@ struct OnboardingView: View {
                 selectedPlace = items.first
                 isSearchingPlaces = false
                 searchError = nil
-                refreshPanelContent()
             }
         }
+    }
+
+    /// Re-anchor the live search completer on the user's current map view, so suggestions
+    /// follow a pan. Throttled to 10% of the current span to avoid hammering
+    /// MKLocalSearchCompleter on every camera frame during a continuous pan.
+    private func refreshSearchCompleterRegionIfNeeded(_ region: MKCoordinateRegion) {
+        guard isSearchModeVisible, !trimmedSearchText.isEmpty else { return }
+        let center = region.center
+        if let last = lastCompleterRegionCenter,
+           abs(last.latitude - center.latitude) < region.span.latitudeDelta * 0.1,
+           abs(last.longitude - center.longitude) < region.span.longitudeDelta * 0.1 {
+            return
+        }
+        lastCompleterRegionCenter = center
+        searchCompleter.region = region
     }
 
     private var mapControls: some View {
@@ -721,7 +761,6 @@ struct OnboardingView: View {
             guard tab == .waiting else { return }
             isSearchActive = false
             searchFocused = false
-            refreshPanelContent()
         }
     }
 
@@ -747,7 +786,6 @@ struct OnboardingView: View {
                     isSearchActive = false
                     searchFocused = false
                 }
-                refreshPanelContent()
             }
         } label: {
             Text(tab.title)
@@ -851,10 +889,6 @@ struct OnboardingView: View {
         return abs(value.translation.width) < value.translation.height
     }
 
-    private func refreshPanelContent() {
-        panelContentRevision &+= 1
-    }
-
     private func clearSearchModeState() {
         searchText = ""
         searchResults = []
@@ -891,7 +925,6 @@ struct OnboardingView: View {
                 panelDetent = .peek
             }
         }
-        refreshPanelContent()
     }
 
     private func collapsePanelForMapInteraction() {
@@ -910,7 +943,6 @@ struct OnboardingView: View {
             livePanelHeight = nil
             panelDragStartHeight = nil
         }
-        refreshPanelContent()
     }
 
     private var offlineBanner: some View {
@@ -1032,8 +1064,12 @@ struct OnboardingView: View {
     }
 
     private var mapCollapseGesture: some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { _ in
+        // 30pt + .onEnded only: a tap with finger drift up to ~25pt no longer collapses
+        // the sheet, so pin-button taps reach `selectPlaceFromMap`/`openDetail` without
+        // a competing collapse animation. The collapse only fires after the user lifts.
+        DragGesture(minimumDistance: 30)
+            .onEnded { _ in
+                guard panelDetent != .peek else { return }
                 collapsePanelForMapInteraction()
             }
     }
@@ -1098,9 +1134,14 @@ struct OnboardingView: View {
         let height = max(0, screenHeight - endFrame.minY)
         let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval ?? 0.25
 
+        // Only snap to .full on the keyboard's appear transition. Frame changes mid-session
+        // (predictive bar toggle, IME swap, orientation, autofill bar) must not stomp a
+        // user-initiated drag down to .medium.
+        let keyboardJustAppeared = keyboardHeight == 0 && height > 0
+
         withAnimation(.easeOut(duration: duration)) {
             keyboardHeight = height
-            if height > 0, searchFocused {
+            if keyboardJustAppeared, searchFocused {
                 panelDetent = .full
                 livePanelHeight = nil
                 panelDragStartHeight = nil
@@ -1403,13 +1444,13 @@ struct OnboardingView: View {
 
     private func commitSearch(_ suggestion: MKLocalSearchCompletion? = nil) {
         searchTask?.cancel()
+        beginProgrammaticSearch()
         if let suggestion {
             searchText = suggestion.subtitle.isEmpty ? suggestion.title : "\(suggestion.title) \(suggestion.subtitle)"
         }
         searchFocused = false
         isSearchActive = false
         searchCompleter.queryFragment = ""
-        refreshPanelContent()
         withAnimation(Tokens.Motion.spring) {
             panelTab = .map
             panelDetent = .medium
@@ -1419,16 +1460,26 @@ struct OnboardingView: View {
 
     private func selectCategory(_ preset: CategoryPreset) {
         selectedCategory = preset
+        beginProgrammaticSearch()
         searchText = preset.query
         searchFocused = false
         isSearchActive = false
         searchCompleter.queryFragment = ""
-        refreshPanelContent()
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .medium
             panelTab = .map
         }
         searchPlaces(query: preset.query)
+    }
+
+    /// Latch the programmatic-search flag for one runloop so the synchronous searchText
+    /// mutation can fire `.onChange(of: searchText)` once and be skipped by its guard. The
+    /// flag lifts on the next main-loop tick, restoring the typed-path behavior.
+    private func beginProgrammaticSearch() {
+        isApplyingProgrammaticSearch = true
+        DispatchQueue.main.async {
+            isApplyingProgrammaticSearch = false
+        }
     }
 
     private var placeResultsList: some View {
@@ -1892,7 +1943,6 @@ struct OnboardingView: View {
             guard let coordinate else { return }
             isUserIn = true
             savedCoordinate = coordinate
-            refreshPanelContent()
             focusOnPeople()
         }
     }
@@ -1907,7 +1957,6 @@ struct OnboardingView: View {
         if savedCoordinate != nil {
             LocationCache.setActive(true)
             isUserIn = true
-            refreshPanelContent()
             focusOnPeople()
             return
         }
@@ -1934,7 +1983,6 @@ struct OnboardingView: View {
 
         PingLog.setPingedAt(friend.id)
         pingTick = Date()
-        refreshPanelContent()
         ensureLocationForPing { coordinate in
             let state = TweenState(
                 text: "I'm in",
@@ -1962,7 +2010,6 @@ struct OnboardingView: View {
                 return
             }
             savedCoordinate = coordinate
-            refreshPanelContent()
             completion(coordinate)
         }
     }
@@ -2006,7 +2053,6 @@ struct OnboardingView: View {
         }
         FriendRoster.save(friends)
         editorMode = nil
-        refreshPanelContent()
     }
 
     private func addContactFriend(_ contact: ContactCandidate) {
@@ -2024,7 +2070,6 @@ struct OnboardingView: View {
         }
         FriendRoster.save(friends)
         showContactSearch = false
-        refreshPanelContent()
     }
 
     private func deleteFriend(_ friend: TweenFriend) {
@@ -2032,7 +2077,6 @@ struct OnboardingView: View {
         FriendRoster.save(friends)
         PingLog.clearPing(friend.id)
         pingTick = Date()
-        refreshPanelContent()
     }
 
     private func initials(for friend: TweenFriend) -> String {
@@ -2057,7 +2101,6 @@ struct OnboardingView: View {
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .peek
         }
-        refreshPanelContent()
     }
 
     private func selectPlaceFromMap(_ item: MKMapItem) {
@@ -2073,9 +2116,6 @@ struct OnboardingView: View {
         }
         withAnimation(Tokens.Motion.spring) {
             panelDetent = .medium
-        }
-        DispatchQueue.main.async {
-            refreshPanelContent()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             requestedPlaceScrollID = id
@@ -2093,7 +2133,6 @@ struct OnboardingView: View {
             selectedPlace = item
             panelTab = .map
             panelDetent = .medium
-            refreshPanelContent()
         }
     }
 
@@ -2106,7 +2145,6 @@ struct OnboardingView: View {
             selectedPlace = item
             panelDetent = .peek
         }
-        refreshPanelContent()
     }
 
     private func closeDetail() {
@@ -2117,7 +2155,6 @@ struct OnboardingView: View {
             panelTab = .map
             panelDetent = searchResults.isEmpty ? .peek : .medium
         }
-        refreshPanelContent()
     }
 
     private func openInAppleMaps(_ item: MKMapItem) {
@@ -2244,7 +2281,6 @@ struct OnboardingView: View {
         rankedSpots = []
         searchError = nil
         provider = LocationProvider()
-        refreshPanelContent()
         withAnimation(Tokens.Motion.spring) { panelDetent = .medium }
     }
 
@@ -2300,6 +2336,7 @@ struct OnboardingView: View {
     /// triggers the system permission prompt — that stays a deliberate user tap.
     private func silentlyRefreshLocationIfAuthorized() {
         guard !userClearedLocation else { return }
+        guard pendingDebugSeed == nil else { return }
         provider.requestOnceIfAuthorized(activate: isUserIn) { coordinate in
             guard !userClearedLocation else { return }
             guard let coordinate else { return }
@@ -2309,6 +2346,10 @@ struct OnboardingView: View {
     }
 
     private func refreshSavedLocation(forceFocus: Bool = false) {
+        // Skip while a debug-launch seed is still pending: this function reads from
+        // FriendRoster / LocationCache, but those caches don't get written until the
+        // side-effects pass runs. Reading early would clobber the @State seeded by init().
+        guard pendingDebugSeed == nil else { return }
         friends = FriendRoster.load()
         let latestReply = PingLog.lastIncomingReplyAt
         if latestReply != lastReplyAt { lastReplyAt = latestReply }
@@ -2390,7 +2431,12 @@ struct OnboardingView: View {
         let query = (explicitQuery ?? searchText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
 
+        // Cancel any in-flight committed-search task so its late completion can't clobber
+        // the new query's results, detent, or focus.
+        placesSearchTask?.cancel()
+
         searchError = nil
+        isSearchingPlaces = true
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
         request.resultTypes = [.pointOfInterest]
@@ -2399,18 +2445,24 @@ struct OnboardingView: View {
         let a = savedCoordinate
         let b = peerCoordinate
 
-        Task {
+        placesSearchTask = Task {
+            // Recency guard: a newer searchPlaces (or a typed-search clear) flips the trimmed
+            // text. If the text moved on while this Task awaited the network, drop the result.
+            func stillCurrent() -> Bool {
+                !Task.isCancelled && trimmedSearchText == query
+            }
             do {
                 let response = try await MKLocalSearch(request: request).start()
                 let items = Array(response.mapItems.prefix(6))
                 await MainActor.run {
+                    guard stillCurrent() else { return }
                     searchResults = items
                     rankedSpots = []
                     selectedPlace = items.first
                     searchError = items.isEmpty ? "No places found nearby" : nil
+                    isSearchingPlaces = false
                     isSearchActive = false
                     searchFocused = false
-                    refreshPanelContent()
                     panelDetent = .medium
                     focusOnPlacesAndPeople()
                 }
@@ -2419,20 +2471,21 @@ struct OnboardingView: View {
                 guard let a, let b, !items.isEmpty else { return }
                 let ranked = await FairnessRanker.rank(candidates: items, from: a, and: b)
                 await MainActor.run {
+                    guard stillCurrent() else { return }
                     rankedSpots = ranked
                     let rankedItems = ranked.map(\.item)
                     let unranked = items.filter { item in !rankedItems.contains(where: { $0 == item }) }
                     searchResults = rankedItems + unranked
                     selectedPlace = searchResults.first
-                    refreshPanelContent()
                 }
             } catch {
                 await MainActor.run {
+                    guard stillCurrent() else { return }
                     searchResults = []
                     rankedSpots = []
                     selectedPlace = nil
+                    isSearchingPlaces = false
                     searchError = "Search failed"
-                    refreshPanelContent()
                 }
             }
         }
@@ -2674,103 +2727,26 @@ struct OnboardingView: View {
             .joined(separator: " ")
     }
 
-    private func applyDebugLaunchStateIfNeeded() {
-        guard !didApplyDebugLaunchState else { return }
-        didApplyDebugLaunchState = true
-
-        let arguments = Set(ProcessInfo.processInfo.arguments)
-        let environmentState = ProcessInfo.processInfo.environment["TWEEN_UI_TEST_STATE"]
-        guard arguments.contains("-TweenUITestState") || environmentState != nil else { return }
-
-        isApplyingDebugLaunchState = true
-        defer {
-            DispatchQueue.main.async {
-                isApplyingDebugLaunchState = false
-            }
-        }
+    /// Runs the side effects that can't be expressed via `State(initialValue:)` in `init()`:
+    /// App Group writes, FriendRoster persistence, and the post-render camera reframe. The
+    /// seeded @State itself has already been applied by `init()` — this function only fires
+    /// the I/O that has to wait until the view is on screen. Consuming `pendingDebugSeed`
+    /// guarantees it runs at most once even if `.onAppear` fires twice (scene re-activation).
+    private func applyDebugLaunchSideEffectsIfNeeded() {
+        guard let seed = pendingDebugSeed else { return }
+        pendingDebugSeed = nil
 
         OnboardingFlags.hasSeenOnboarding = true
-        showTutorial = false
-        userClearedLocation = false
-        savedCoordinate = CLLocationCoordinate2D(latitude: 38.8568, longitude: -77.3909)
-        peerCoordinate = CLLocationCoordinate2D(latitude: 38.9586, longitude: -77.3570)
-        isUserIn = true
-        LocationCache.save(savedCoordinate!)
-        LocationCache.savePeer(peerCoordinate!)
+        LocationCache.save(seed.savedCoordinate)
+        LocationCache.savePeer(seed.peerCoordinate)
         LocationCache.setActive(true)
-
-        let starbucks = debugMapItem(
-            name: "Starbucks Coffee",
-            coordinate: CLLocationCoordinate2D(latitude: 38.9575, longitude: -77.3568)
-        )
-        let park = debugMapItem(
-            name: "Reston Town Center",
-            coordinate: CLLocationCoordinate2D(latitude: 38.9587, longitude: -77.3589)
-        )
-
-        if arguments.contains("-TweenUITestSearch") || environmentState == "Search" {
-            searchText = "h"
-            searchResults = []
-            rankedSpots = []
-            selectedPlace = nil
-            detailItem = nil
-            searchError = nil
-            isSearchActive = true
-            panelTab = .map
-            panelDetent = .full
-        } else if arguments.contains("-TweenUITestResults") || environmentState == "Results" {
-            searchText = ""
-            searchResults = [starbucks, park]
-            rankedSpots = []
-            selectedPlace = starbucks
-            detailItem = nil
-            searchError = nil
-            isSearchActive = false
-            panelTab = .map
-            panelDetent = .medium
-            focusOnPlacesAndPeople()
-        } else if arguments.contains("-TweenUITestLiveResults") || environmentState == "LiveResults" {
-            searchText = "han"
-            searchResults = [starbucks, park]
-            rankedSpots = []
-            selectedPlace = starbucks
-            detailItem = nil
-            searchError = nil
-            isSearchingPlaces = false
-            isSearchActive = true
-            panelTab = .map
-            panelDetent = .full
-            focusOnPlacesAndPeople()
-        } else if arguments.contains("-TweenUITestWaiting") || environmentState == "Waiting" {
-            friends = [
-                TweenFriend(name: "Maya Ahmed", contactIdentifier: "debug-maya", messageHandle: "maya@example.com")
-            ]
+        if let friends = seed.friends {
             FriendRoster.save(friends)
-            isSearchActive = false
-            searchText = ""
-            panelTab = .waiting
-            panelDetent = .medium
-            pingTick = Date()
-            refreshPanelContent()
-        } else if arguments.contains("-TweenUITestMapPin") || environmentState == "MapPin" {
-            searchText = ""
-            searchResults = [starbucks]
-            rankedSpots = []
-            selectedPlace = starbucks
-            detailItem = nil
-            searchError = nil
-            isSearchActive = false
-            panelTab = .map
-            panelDetent = .peek
+        }
+        if seed.shouldFocusPlacesAndPeople {
             focusOnPlacesAndPeople()
         }
-        refreshPanelContent()
-    }
-
-    private func debugMapItem(name: String, coordinate: CLLocationCoordinate2D) -> MKMapItem {
-        let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
-        item.name = name
-        return item
+        pingTick = Date()
     }
 }
 
@@ -2952,6 +2928,125 @@ private struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// Snapshot of the UI-test launch state. Resolved once from `ProcessInfo` in `init()`
+/// and applied to `@State` backing storage via `State(initialValue:)`, so the very
+/// first body render (and therefore the .sheet's first content render) sees the
+/// seeded values. Side effects that can't run in `init()` (App Group writes, camera
+/// reframe) are deferred to `.onAppear` via `pendingDebugSeed`.
+private struct DebugLaunchSeed {
+    let searchText: String
+    let searchResults: [MKMapItem]
+    let selectedPlace: MKMapItem?
+    let isSearchActive: Bool
+    let panelTab: HomePanelTab
+    let panelDetent: PanelDetent
+    let friends: [TweenFriend]?
+    let savedCoordinate: CLLocationCoordinate2D
+    let peerCoordinate: CLLocationCoordinate2D
+    let shouldFocusPlacesAndPeople: Bool
+
+    static func resolve() -> DebugLaunchSeed? {
+        let arguments = Set(ProcessInfo.processInfo.arguments)
+        let environmentState = ProcessInfo.processInfo.environment["TWEEN_UI_TEST_STATE"]
+        guard arguments.contains("-TweenUITestState") || environmentState != nil else { return nil }
+
+        let savedCoordinate = CLLocationCoordinate2D(latitude: 38.8568, longitude: -77.3909)
+        let peerCoordinate = CLLocationCoordinate2D(latitude: 38.9586, longitude: -77.3570)
+        let starbucks = mapItem(
+            name: "Starbucks Coffee",
+            coordinate: CLLocationCoordinate2D(latitude: 38.9575, longitude: -77.3568)
+        )
+        let park = mapItem(
+            name: "Reston Town Center",
+            coordinate: CLLocationCoordinate2D(latitude: 38.9587, longitude: -77.3589)
+        )
+
+        func has(_ flag: String, _ envValue: String) -> Bool {
+            arguments.contains(flag) || environmentState == envValue
+        }
+
+        if has("-TweenUITestSearch", "Search") {
+            return DebugLaunchSeed(
+                searchText: "h",
+                searchResults: [],
+                selectedPlace: nil,
+                isSearchActive: true,
+                panelTab: .map,
+                panelDetent: .full,
+                friends: nil,
+                savedCoordinate: savedCoordinate,
+                peerCoordinate: peerCoordinate,
+                shouldFocusPlacesAndPeople: false
+            )
+        }
+        if has("-TweenUITestResults", "Results") {
+            return DebugLaunchSeed(
+                searchText: "",
+                searchResults: [starbucks, park],
+                selectedPlace: starbucks,
+                isSearchActive: false,
+                panelTab: .map,
+                panelDetent: .medium,
+                friends: nil,
+                savedCoordinate: savedCoordinate,
+                peerCoordinate: peerCoordinate,
+                shouldFocusPlacesAndPeople: true
+            )
+        }
+        if has("-TweenUITestLiveResults", "LiveResults") {
+            return DebugLaunchSeed(
+                searchText: "han",
+                searchResults: [starbucks, park],
+                selectedPlace: starbucks,
+                isSearchActive: true,
+                panelTab: .map,
+                panelDetent: .full,
+                friends: nil,
+                savedCoordinate: savedCoordinate,
+                peerCoordinate: peerCoordinate,
+                shouldFocusPlacesAndPeople: true
+            )
+        }
+        if has("-TweenUITestWaiting", "Waiting") {
+            return DebugLaunchSeed(
+                searchText: "",
+                searchResults: [],
+                selectedPlace: nil,
+                isSearchActive: false,
+                panelTab: .waiting,
+                panelDetent: .medium,
+                friends: [
+                    TweenFriend(name: "Maya Ahmed", contactIdentifier: "debug-maya", messageHandle: "maya@example.com")
+                ],
+                savedCoordinate: savedCoordinate,
+                peerCoordinate: peerCoordinate,
+                shouldFocusPlacesAndPeople: false
+            )
+        }
+        if has("-TweenUITestMapPin", "MapPin") {
+            return DebugLaunchSeed(
+                searchText: "",
+                searchResults: [starbucks],
+                selectedPlace: starbucks,
+                isSearchActive: false,
+                panelTab: .map,
+                panelDetent: .peek,
+                friends: nil,
+                savedCoordinate: savedCoordinate,
+                peerCoordinate: peerCoordinate,
+                shouldFocusPlacesAndPeople: true
+            )
+        }
+        return nil
+    }
+
+    private static func mapItem(name: String, coordinate: CLLocationCoordinate2D) -> MKMapItem {
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        item.name = name
+        return item
+    }
 }
 
 private enum HomePanelTab: String, CaseIterable, Identifiable {
