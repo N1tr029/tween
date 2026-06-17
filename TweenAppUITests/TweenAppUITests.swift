@@ -47,6 +47,23 @@ final class TweenAppUITests: XCTestCase {
     }
 
     @MainActor
+    func testTypedSearchModeDragDownLeavesSearch() {
+        let app = launchApp("-TweenUITestReady")
+
+        let searchField = app.textFields["Search coffee, lunch, parks..."]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
+        searchField.tap()
+        searchField.typeText("h")
+
+        let start = searchField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = start.withOffset(CGVector(dx: 0, dy: 360))
+        start.press(forDuration: 0.1, thenDragTo: end)
+
+        XCTAssertTrue(app.buttons["Expand sheet"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Search for “h”"].waitForExistence(timeout: 1))
+    }
+
+    @MainActor
     func testPlaceResultsAndDetailRender() {
         let app = launchApp("-TweenUITestResults")
 
@@ -59,6 +76,26 @@ final class TweenAppUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Copy link"].exists)
+    }
+
+    @MainActor
+    func testLiveSearchResultsRenderAndOpenDetail() {
+        let app = launchApp("-TweenUITestLiveResults")
+
+        XCTAssertTrue(app.staticTexts["Results"].waitForExistence(timeout: 5))
+        let liveRow = app.buttons["live-place-row-Starbucks Coffee"]
+        XCTAssertTrue(liveRow.waitForExistence(timeout: 5))
+        liveRow.tap()
+
+        XCTAssertTrue(app.buttons["Open in Apple Maps"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Copy link"].exists)
+    }
+
+    @MainActor
+    func testMapTabShowsSearchEmptyState() {
+        let app = launchApp("-TweenUITestReady")
+
+        XCTAssertTrue(app.staticTexts["Search for coffee, food, parks…"].waitForExistence(timeout: 5))
     }
 
     @MainActor

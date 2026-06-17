@@ -24,6 +24,7 @@ struct OnboardingView: View {
     @State private var rankedSpots: [RankedSpot] = []
     @State private var selectedPlace: MKMapItem?
     @State private var searchError: String?
+    @State private var isSearchingPlaces = false
     @State private var panelDetent: PanelDetent = .medium
     @State private var panelTab: HomePanelTab = .map
     @State private var position: MapCameraPosition
@@ -73,14 +74,18 @@ struct OnboardingView: View {
     @StateObject private var searchCompleter = SearchCompleter()
     @State private var isSearchActive = false
     @State private var panelContentRevision = 0
+    @State private var didCollapseWithPanelDrag = false
+    @State private var selectedSheetDetent: PresentationDetent = .medium
     @FocusState private var searchFocused: Bool
     @Namespace private var spotTransition
     @State private var didApplyDebugLaunchState = false
+    @State private var isApplyingDebugLaunchState = false
 
     var body: some View {
         ZStack(alignment: .top) {
             styledMap
                 .ignoresSafeArea()
+                .ignoresSafeArea(.keyboard)
                 .simultaneousGesture(mapCollapseGesture)
 
             VStack {
@@ -93,10 +98,20 @@ struct OnboardingView: View {
                 Spacer()
             }
 
-            NativePanelSheet(panelDetent: $panelDetent, contentRevision: $panelContentRevision) {
-                bottomPanel
-            }
-            .id(panelContentRevision)
+            Color.clear
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+                .sheet(isPresented: .constant(true)) {
+                    bottomPanel
+                        .id(panelContentRevision)
+                        .presentationDetents(Self.sheetDetents, selection: $selectedSheetDetent)
+                        .presentationBackground(.regularMaterial)
+                        .presentationCornerRadius(34)
+                        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                        .presentationContentInteraction(.scrolls)
+                        .interactiveDismissDisabled()
+                        .presentationDragIndicator(.visible)
+                }
 
             if showTutorial {
                 tutorialOverlay
@@ -130,11 +145,18 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: panelDetent) { oldDetent, newDetent in
-            guard oldDetent == .full, newDetent != .full, isSearchModeVisible else { return }
-            clearSearchModeState()
+            let target = Self.sheetDetent(for: newDetent)
+            if selectedSheetDetent != target {
+                selectedSheetDetent = target
+            }
+            guard oldDetent == .full, newDetent != .full, searchFocused else { return }
             searchFocused = false
-            isSearchActive = false
             refreshPanelContent()
+        }
+        .onChange(of: selectedSheetDetent) { _, detent in
+            let target = Self.panelDetent(for: detent)
+            guard panelDetent != target else { return }
+            panelDetent = target
         }
         .alert(
             "Can't send ping",
@@ -310,13 +332,6 @@ struct OnboardingView: View {
                 .submitLabel(.search)
                 .focused($searchFocused)
                 .onSubmit { commitSearch() }
-                .toolbar {
-                    ToolbarItem(placement: .keyboard) {
-                        if searchFocused {
-                            keyboardPanelPicker
-                        }
-                    }
-                }
 
             if !searchText.isEmpty {
                 Button {
@@ -325,6 +340,7 @@ struct OnboardingView: View {
                     rankedSpots = []
                     selectedPlace = nil
                     searchError = nil
+                    isSearchingPlaces = false
                     searchCompleter.queryFragment = ""
                     if isSearchActive || searchFocused {
                         isSearchActive = true
@@ -350,20 +366,33 @@ struct OnboardingView: View {
             isSearchActive = true
             refreshPanelContent()
             searchFocused = true
-            if panelDetent == .peek {
-                withAnimation(Tokens.Motion.spring) { panelDetent = .medium }
+            if panelDetent != .full {
+                withAnimation(Tokens.Motion.spring) {
+                    panelDetent = .full
+                    livePanelHeight = nil
+                    panelDragStartHeight = nil
+                }
             }
         }
         .onChange(of: searchText) { _, newValue in
+            guard !isApplyingDebugLaunchState else { return }
             if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 isSearchActive = true
+                refreshPanelContent()
+                if panelDetent != .full {
+                    withAnimation(Tokens.Motion.spring) {
+                        panelDetent = .full
+                        livePanelHeight = nil
+                        panelDragStartHeight = nil
+                    }
+                }
             }
             updateSearchSuggestions(for: newValue)
         }
     }
 
-    /// Updates lightweight Apple-Maps-style suggestions while typing. Full place search only
-    /// happens when the user submits or taps a suggestion.
+    /// Updates Apple-Maps-style suggestions while typing, then fills the list with nearby
+    /// place results after a short debounce so the sheet feels alive without spamming MapKit.
     private func updateSearchSuggestions(for input: String) {
         searchTask?.cancel()
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -372,26 +401,46 @@ struct OnboardingView: View {
             rankedSpots = []
             selectedPlace = nil
             searchError = nil
+            isSearchingPlaces = false
             searchCompleter.queryFragment = ""
             return
         }
         isSearchActive = true
-        searchResults = []
         rankedSpots = []
         selectedPlace = nil
         detailItem = nil
         searchError = nil
+        let region = activeSearchRegion
+        searchCompleter.region = region
+        searchCompleter.queryFragment = trimmed
+        isSearchingPlaces = true
+        refreshPanelContent()
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(180))
+            try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                searchResults = []
                 rankedSpots = []
                 selectedPlace = nil
                 detailItem = nil
                 searchError = nil
-                searchCompleter.region = activeSearchRegion
-                searchCompleter.queryFragment = trimmed
+            }
+
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = trimmed
+            request.resultTypes = [.pointOfInterest, .address]
+            request.region = region
+
+            let response = try? await MKLocalSearch(request: request).start()
+            let items = Array(response?.mapItems.prefix(8) ?? [])
+
+            await MainActor.run {
+                guard trimmedSearchText == trimmed, isSearchModeVisible else { return }
+                rankedSpots = []
+                searchResults = items
+                selectedPlace = items.first
+                isSearchingPlaces = false
+                searchError = nil
+                refreshPanelContent()
             }
         }
     }
@@ -472,6 +521,7 @@ struct OnboardingView: View {
 
     private var bottomPanel: some View {
         let isShowingDetail = panelTab == .map && detailItem != nil
+        let isShowingCommittedResults = panelTab == .map && !isLiveSearchVisible && (!displayedSearchResults.isEmpty)
 
         return VStack(alignment: .leading, spacing: 0) {
             sheetHeader
@@ -479,9 +529,12 @@ struct OnboardingView: View {
                 .padding(.top, searchResults.isEmpty ? Tokens.Space.s3 : Tokens.Space.s2)
 
             if panelDetent == .peek {
-                peekSummary
-                    .padding(.horizontal, Tokens.Space.s5)
-                    .padding(.bottom, Tokens.Space.s4)
+                VStack(spacing: Tokens.Space.s2) {
+                    searchBar
+                    peekSummary
+                }
+                .padding(.horizontal, Tokens.Space.s5)
+                .padding(.bottom, Tokens.Space.s4)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
@@ -490,28 +543,35 @@ struct OnboardingView: View {
                                 offlineBanner
                             }
 
-                            if isSearchModeVisible && !isShowingDetail {
+                            if isLiveSearchVisible && !isShowingDetail {
                                 Color.clear
-                                    .frame(height: Tokens.Space.s4)
+                                    .frame(height: Tokens.Space.s2)
                             }
 
                             if !isShowingDetail {
                                 searchBar
                                     .id("sheet-search")
-                                categoryChipRow
-                                searchSuggestionsList
+                                if panelTab == .map && !isLiveSearchVisible && trimmedSearchText.isEmpty && displayedSearchResults.isEmpty {
+                                    categoryChipRow
+                                }
+                                if isLiveSearchVisible {
+                                    liveSearchContent
+                                }
                             }
 
-                            if !isSearchModeVisible && !isShowingDetail {
-                                panelTitleRow
+                            if !isLiveSearchVisible && !isShowingDetail {
                                 panelPicker
                             }
 
-                            if panelDetent != .full, panelTab == .map, !isShowingDetail {
+                            if panelDetent != .full,
+                               panelTab == .map,
+                               !isShowingDetail,
+                               !isShowingCommittedResults,
+                               trimmedSearchText.isEmpty {
                                 statusView
                             }
 
-                            if !isSearchModeVisible {
+                            if !isLiveSearchVisible {
                                 panelContent
                             }
                         }
@@ -520,6 +580,7 @@ struct OnboardingView: View {
                         .padding(.bottom, scrollContentBottomPadding)
                     }
                     .scrollBounceBehavior(.basedOnSize)
+                    .scrollDismissesKeyboard(.immediately)
                     .animation(nil, value: panelTab)
                     .onChange(of: requestedPlaceScrollID) { _, id in
                         guard let id else { return }
@@ -725,12 +786,12 @@ struct OnboardingView: View {
                 )
             } else if !searchResults.isEmpty {
                 placeResultsList
+            } else if selectedPlace != nil {
+                placeResultsList
             } else if searchError != nil {
                 searchErrorCard
-            } else if savedCoordinate == nil && peerCoordinate == nil {
-                freshLaunchHero
             } else {
-                EmptyView()
+                mapEmptyState
             }
         case .waiting:
             waitingTab
@@ -738,11 +799,13 @@ struct OnboardingView: View {
     }
 
     private var shouldShowActionControls: Bool {
-        !isSearchModeVisible &&
+        !isLiveSearchVisible &&
         !searchFocused &&
         panelDetent != .full &&
         panelTab == .map &&
         detailItem == nil &&
+        selectedPlace == nil &&
+        trimmedSearchText.isEmpty &&
         searchResults.isEmpty &&
         searchError == nil
     }
@@ -751,20 +814,41 @@ struct OnboardingView: View {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var displayedSearchResults: [MKMapItem] {
+        if !searchResults.isEmpty { return searchResults }
+        if let selectedPlace { return [selectedPlace] }
+        return []
+    }
+
     private var isSearchModeVisible: Bool {
         guard panelTab == .map else { return false }
-        if isSearchActive || searchFocused { return true }
-        return !trimmedSearchText.isEmpty && searchResults.isEmpty && detailItem == nil
+        return detailItem == nil && (isSearchActive || searchFocused)
+    }
+
+    private var isLiveSearchVisible: Bool {
+        isSearchModeVisible
     }
 
     private var panelExitDragGesture: some Gesture {
         DragGesture(minimumDistance: 18, coordinateSpace: .global)
-            .onEnded { value in
-                guard panelDetent == .full else { return }
-                guard value.translation.height > 70 else { return }
-                guard abs(value.translation.width) < value.translation.height else { return }
+            .onChanged { value in
+                guard !didCollapseWithPanelDrag else { return }
+                guard isMostlyVerticalDownwardDrag(value) else { return }
+                didCollapseWithPanelDrag = true
                 collapsePanelForMapInteraction()
             }
+            .onEnded { value in
+                defer { didCollapseWithPanelDrag = false }
+                guard !didCollapseWithPanelDrag else { return }
+                guard isMostlyVerticalDownwardDrag(value) else { return }
+                collapsePanelForMapInteraction()
+            }
+    }
+
+    private func isMostlyVerticalDownwardDrag(_ value: DragGesture.Value) -> Bool {
+        guard panelDetent == .full else { return false }
+        guard value.translation.height > 70 else { return false }
+        return abs(value.translation.width) < value.translation.height
     }
 
     private func refreshPanelContent() {
@@ -778,6 +862,7 @@ struct OnboardingView: View {
         selectedPlace = nil
         detailItem = nil
         searchError = nil
+        isSearchingPlaces = false
         searchCompleter.queryFragment = ""
     }
 
@@ -814,11 +899,11 @@ struct OnboardingView: View {
         let shouldClearSearch = isSearchModeVisible
 
         withAnimation(Tokens.Motion.spring) {
+            searchFocused = false
+            isSearchActive = false
             if shouldClearSearch {
                 clearSearchModeState()
             }
-            searchFocused = false
-            isSearchActive = false
             detailItem = nil
             panelTab = .map
             panelDetent = .peek
@@ -954,6 +1039,22 @@ struct OnboardingView: View {
     }
 
     private static let peekHeight: CGFloat = 120
+    private static var sheetPeekDetent: PresentationDetent { .height(peekHeight) }
+    private static var sheetDetents: Set<PresentationDetent> { [sheetPeekDetent, .medium, .large] }
+
+    private static func sheetDetent(for detent: PanelDetent) -> PresentationDetent {
+        switch detent {
+        case .peek: sheetPeekDetent
+        case .medium: .medium
+        case .full: .large
+        }
+    }
+
+    private static func panelDetent(for detent: PresentationDetent) -> PanelDetent {
+        if detent == sheetPeekDetent { return .peek }
+        if detent == .large { return .full }
+        return .medium
+    }
 
     private var panelInteractiveHeight: CGFloat {
         livePanelHeight ?? height(for: panelDetent)
@@ -1180,6 +1281,45 @@ struct OnboardingView: View {
     }
 
     @ViewBuilder
+    private var liveSearchContent: some View {
+        if !searchResults.isEmpty {
+            livePlaceResultsList
+        } else if !searchCompleter.suggestions.isEmpty || !isSearchingPlaces {
+            searchSuggestionsList
+        } else {
+            liveSearchLoadingList
+        }
+    }
+
+    private var liveSearchLoadingList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Tokens.Space.s3) {
+                ProgressView()
+                    .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Searching nearby")
+                        .font(Tokens.Typography.headline)
+                        .foregroundStyle(Tokens.Palette.onSurface)
+                    Text(trimmedSearchText)
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, Tokens.Space.s3)
+            .padding(.vertical, Tokens.Space.s3)
+        }
+        .background(Tokens.Palette.surface.opacity(0.78), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
     private var searchSuggestionsList: some View {
         let trimmed = trimmedSearchText
         if isSearchModeVisible, !trimmed.isEmpty, searchResults.isEmpty, detailItem == nil {
@@ -1264,7 +1404,7 @@ struct OnboardingView: View {
     private func commitSearch(_ suggestion: MKLocalSearchCompletion? = nil) {
         searchTask?.cancel()
         if let suggestion {
-            searchText = suggestion.title
+            searchText = suggestion.subtitle.isEmpty ? suggestion.title : "\(suggestion.title) \(suggestion.subtitle)"
         }
         searchFocused = false
         isSearchActive = false
@@ -1304,7 +1444,7 @@ struct OnboardingView: View {
 
                 Spacer()
 
-                Text("\(searchResults.count)")
+                Text("\(displayedSearchResults.count)")
                     .font(Tokens.Typography.captionEmphasized)
                     .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                     .frame(minWidth: 26, minHeight: 26)
@@ -1312,11 +1452,115 @@ struct OnboardingView: View {
             }
 
             VStack(spacing: Tokens.Space.s3) {
-                ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
+                ForEach(Array(displayedSearchResults.enumerated()), id: \.element) { index, item in
                     placeResultRow(item: item, index: index)
                         .id(placeListID(for: item))
                 }
             }
+        }
+    }
+
+    private var livePlaceResultsList: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.s2) {
+            Text("Results")
+                .font(Tokens.Typography.title)
+                .foregroundStyle(Tokens.Palette.onSurface)
+
+            VStack(spacing: 0) {
+                ForEach(Array(searchResults.enumerated()), id: \.element) { index, item in
+                    livePlaceResultRow(item: item, index: index)
+                    if index < searchResults.count - 1 {
+                        Divider()
+                            .padding(.leading, 58)
+                    }
+                }
+            }
+            .background(Tokens.Palette.surface.opacity(0.78), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                    .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+            }
+        }
+    }
+
+    private func livePlaceResultRow(item: MKMapItem, index: Int) -> some View {
+        Button {
+            openDetail(item)
+        } label: {
+            HStack(spacing: Tokens.Space.s3) {
+                ZStack {
+                    Circle()
+                        .fill(index == 0 ? Tokens.Palette.brand : placeColor(for: item).opacity(0.86))
+                    Image(systemName: placeIcon(for: item))
+                        .font(Tokens.Typography.callout.weight(.bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name ?? "Place")
+                        .font(Tokens.Typography.headline)
+                        .foregroundStyle(Tokens.Palette.onSurface)
+                        .lineLimit(1)
+                    Text(livePlaceSubtitle(for: item))
+                        .font(Tokens.Typography.callout)
+                        .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(Tokens.Typography.captionEmphasized)
+                    .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+            }
+            .padding(.horizontal, Tokens.Space.s3)
+            .padding(.vertical, Tokens.Space.s2 + 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("live-place-row-\(item.name ?? "Place")")
+    }
+
+    private func livePlaceSubtitle(for item: MKMapItem) -> String {
+        let distance = distanceFrom(savedCoordinate ?? peerCoordinate, to: item)
+        let category = placeTypeLabel(for: item)
+        let address = compactAddress(for: item)
+        return [category, distance, address]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    private func compactAddress(for item: MKMapItem) -> String? {
+        let placemark = item.placemark
+        let parts = [placemark.locality, placemark.administrativeArea]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !parts.isEmpty { return parts.joined(separator: ", ") }
+        return placemark.title == item.name ? nil : placemark.title
+    }
+
+    private var mapEmptyState: some View {
+        VStack(spacing: Tokens.Space.s3) {
+            Image(systemName: "magnifyingglass.circle.fill")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(Tokens.Palette.brand)
+            Text("Search for coffee, food, parks…")
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .multilineTextAlignment(.center)
+            Text("Type in the search bar or pick a category to find places near the midpoint.")
+                .font(Tokens.Typography.callout)
+                .foregroundStyle(Tokens.Palette.onSurfaceMuted)
+                .multilineTextAlignment(.center)
+        }
+        .padding(Tokens.Space.s4)
+        .frame(maxWidth: .infinity)
+        .background(Tokens.Palette.surface.opacity(0.66), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
         }
     }
 
@@ -1367,14 +1611,23 @@ struct OnboardingView: View {
             Image(systemName: "person.2.badge.plus")
                 .font(.system(size: 42, weight: .regular))
                 .foregroundStyle(Tokens.Palette.onSurfaceMuted)
-            Text("Add someone you're waiting on a reply from.")
+            Text("Waiting for friends to join")
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(Tokens.Palette.onSurface)
+                .multilineTextAlignment(.center)
+            Text("Add someone from Contacts or share your spot so Tween can find a fair meetup.")
                 .font(Tokens.Typography.callout)
                 .foregroundStyle(Tokens.Palette.onSurfaceMuted)
                 .multilineTextAlignment(.center)
             groupLocationButton
         }
-        .padding(.vertical, Tokens.Space.s4 + 2)
+        .padding(Tokens.Space.s4)
         .frame(maxWidth: .infinity)
+        .background(Tokens.Palette.surface.opacity(0.66), in: RoundedRectangle(cornerRadius: Tokens.Radius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.card)
+                .stroke(Tokens.Palette.glassStroke, lineWidth: 1)
+        }
     }
 
     private var groupLocationButton: some View {
@@ -1830,11 +2083,16 @@ struct OnboardingView: View {
     }
 
     private func openDetail(_ item: MKMapItem) {
+        if let coordinate = item.placemark.location?.coordinate {
+            centerMap(on: coordinate, avoidingBottomOverlay: true)
+        }
         withAnimation(Tokens.Motion.spring) {
             isSearchActive = false
             searchFocused = false
             detailItem = item
             selectedPlace = item
+            panelTab = .map
+            panelDetent = .medium
             refreshPanelContent()
         }
     }
@@ -2421,7 +2679,15 @@ struct OnboardingView: View {
         didApplyDebugLaunchState = true
 
         let arguments = Set(ProcessInfo.processInfo.arguments)
-        guard arguments.contains("-TweenUITestState") else { return }
+        let environmentState = ProcessInfo.processInfo.environment["TWEEN_UI_TEST_STATE"]
+        guard arguments.contains("-TweenUITestState") || environmentState != nil else { return }
+
+        isApplyingDebugLaunchState = true
+        defer {
+            DispatchQueue.main.async {
+                isApplyingDebugLaunchState = false
+            }
+        }
 
         OnboardingFlags.hasSeenOnboarding = true
         showTutorial = false
@@ -2442,7 +2708,7 @@ struct OnboardingView: View {
             coordinate: CLLocationCoordinate2D(latitude: 38.9587, longitude: -77.3589)
         )
 
-        if arguments.contains("-TweenUITestSearch") {
+        if arguments.contains("-TweenUITestSearch") || environmentState == "Search" {
             searchText = "h"
             searchResults = []
             rankedSpots = []
@@ -2452,8 +2718,8 @@ struct OnboardingView: View {
             isSearchActive = true
             panelTab = .map
             panelDetent = .full
-        } else if arguments.contains("-TweenUITestResults") {
-            searchText = "starbucks"
+        } else if arguments.contains("-TweenUITestResults") || environmentState == "Results" {
+            searchText = ""
             searchResults = [starbucks, park]
             rankedSpots = []
             selectedPlace = starbucks
@@ -2463,7 +2729,19 @@ struct OnboardingView: View {
             panelTab = .map
             panelDetent = .medium
             focusOnPlacesAndPeople()
-        } else if arguments.contains("-TweenUITestWaiting") {
+        } else if arguments.contains("-TweenUITestLiveResults") || environmentState == "LiveResults" {
+            searchText = "han"
+            searchResults = [starbucks, park]
+            rankedSpots = []
+            selectedPlace = starbucks
+            detailItem = nil
+            searchError = nil
+            isSearchingPlaces = false
+            isSearchActive = true
+            panelTab = .map
+            panelDetent = .full
+            focusOnPlacesAndPeople()
+        } else if arguments.contains("-TweenUITestWaiting") || environmentState == "Waiting" {
             friends = [
                 TweenFriend(name: "Maya Ahmed", contactIdentifier: "debug-maya", messageHandle: "maya@example.com")
             ]
@@ -2474,8 +2752,8 @@ struct OnboardingView: View {
             panelDetent = .medium
             pingTick = Date()
             refreshPanelContent()
-        } else if arguments.contains("-TweenUITestMapPin") {
-            searchText = "starbucks"
+        } else if arguments.contains("-TweenUITestMapPin") || environmentState == "MapPin" {
+            searchText = ""
             searchResults = [starbucks]
             rankedSpots = []
             selectedPlace = starbucks
@@ -3055,7 +3333,7 @@ private final class SearchCompleter: NSObject, ObservableObject, MKLocalSearchCo
     override init() {
         super.init()
         completer.delegate = self
-        completer.resultTypes = [.pointOfInterest, .query]
+        completer.resultTypes = [.pointOfInterest, .address, .query]
     }
 
     func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
@@ -3146,66 +3424,6 @@ private enum PanelDetent: CaseIterable {
         case .medium: .peek
         case .full: .medium
         }
-    }
-}
-
-private struct NativePanelSheet<SheetContent: View>: View {
-    @Binding var panelDetent: PanelDetent
-    @Binding var contentRevision: Int
-    @State private var selectedDetent: PresentationDetent = .medium
-    @ViewBuilder let content: () -> SheetContent
-
-    private static var peekDetent: PresentationDetent { .height(120) }
-    private static var detents: Set<PresentationDetent> { [Self.peekDetent, .medium, .large] }
-
-    init(
-        panelDetent: Binding<PanelDetent>,
-        contentRevision: Binding<Int>,
-        @ViewBuilder content: @escaping () -> SheetContent
-    ) {
-        _panelDetent = panelDetent
-        _contentRevision = contentRevision
-        _selectedDetent = State(initialValue: Self.sheetDetent(for: panelDetent.wrappedValue))
-        self.content = content
-    }
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .allowsHitTesting(false)
-            .sheet(isPresented: .constant(true)) {
-                content()
-                    .id(contentRevision)
-                    .presentationDetents(Self.detents, selection: $selectedDetent)
-                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                    .presentationContentInteraction(.resizes)
-                    .interactiveDismissDisabled()
-                    .presentationDragIndicator(.visible)
-            }
-            .onChange(of: panelDetent) { _, detent in
-                let target = Self.sheetDetent(for: detent)
-                guard selectedDetent != target else { return }
-                selectedDetent = target
-            }
-            .onChange(of: selectedDetent) { _, detent in
-                let target = Self.panelDetent(for: detent)
-                guard panelDetent != target else { return }
-                panelDetent = target
-            }
-    }
-
-    private static func sheetDetent(for detent: PanelDetent) -> PresentationDetent {
-        switch detent {
-        case .peek: Self.peekDetent
-        case .medium: .medium
-        case .full: .large
-        }
-    }
-
-    private static func panelDetent(for detent: PresentationDetent) -> PanelDetent {
-        if detent == Self.peekDetent { return .peek }
-        if detent == .large { return .full }
-        return .medium
     }
 }
 
