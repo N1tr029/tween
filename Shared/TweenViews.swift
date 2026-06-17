@@ -153,6 +153,14 @@ struct ExpandedView: View {
 
     private var topSpots: [RankedSpot] { Array(rankedSpots.prefix(3)) }
 
+    /// Stable identity for animations/haptics that survives re-ranking. `MKMapItem.hash`
+    /// is per-instance, so a fresh fetch of the same logical place changes the hash and
+    /// fires animations spuriously. Coordinate + name is stable across re-fetches.
+    private static func spotKey(_ spot: RankedSpot?) -> String? {
+        guard let spot, let coord = spot.item.placemark.location?.coordinate else { return nil }
+        return "\(spot.item.name ?? "")|\(coord.latitude)|\(coord.longitude)"
+    }
+
     private var primaryCTALabel: String {
         if let selectedSpot {
             return "Send \(selectedSpot.item.name ?? "this spot")"
@@ -248,7 +256,7 @@ struct ExpandedView: View {
                 .buttonStyle(.tweenPrimary)
                 .disabled(isRequesting)
                 .animation(Tokens.Motion.spring, value: isRequesting)
-                .animation(Tokens.Motion.spring, value: selectedSpot?.item.hash)
+                .animation(Tokens.Motion.spring, value: Self.spotKey(selectedSpot))
                 .animation(Tokens.Motion.spring, value: cachedCoordinate?.latitude)
                 .accessibilityLabel(primaryCTALabel)
 
@@ -262,7 +270,7 @@ struct ExpandedView: View {
             .tweenGlass(cornerRadius: Tokens.Radius.sheet)
             .padding(Tokens.Space.s3)
             .animation(Tokens.Motion.spring, value: networkMonitor.isOnline)
-            .sensoryFeedback(.selection, trigger: selectedSpot?.item.hash)
+            .sensoryFeedback(.selection, trigger: Self.spotKey(selectedSpot))
             .sensoryFeedback(.success, trigger: sentMessageCount)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -385,7 +393,7 @@ struct ExpandedView: View {
                 .foregroundStyle(Tokens.Palette.onSurfaceMuted)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Tokens.Space.s2) {
-                    ForEach(Array(topSpots.enumerated()), id: \.offset) { offset, spot in
+                    ForEach(Array(topSpots.enumerated()), id: \.element.item.hash) { offset, spot in
                         fairSpotChip(rank: offset + 1, spot: spot)
                     }
                 }
@@ -432,6 +440,7 @@ struct ExpandedView: View {
             }
             .padding(.horizontal, Tokens.Space.s2 + 2)
             .padding(.vertical, Tokens.Space.s1 + 2)
+            .frame(minHeight: 44)
             .background(
                 isSelected || isTop ? Tokens.Palette.brandMuted : Tokens.Palette.surface,
                 in: RoundedRectangle(cornerRadius: Tokens.Radius.chip + 2)
@@ -541,13 +550,22 @@ private struct TweenMapSnapshotView: View {
         options.scale = UIScreen.main.scale
         options.region = region
 
-        let snapshotter = MKMapSnapshotter(options: options)
-        do {
-            let snapshot = try await snapshotter.start()
-            return drawPins(on: snapshot)
-        } catch {
-            return nil
+        // One retry absorbs transient MapKit rate-limit / network blips so the gradient
+        // placeholder doesn't stick forever. A permanent failure still logs and clears
+        // naturally on the next snapshotKey change.
+        for attempt in 0..<2 {
+            do {
+                let snapshot = try await MKMapSnapshotter(options: options).start()
+                return drawPins(on: snapshot)
+            } catch {
+                NSLog("Tween: TweenMapSnapshotView snapshot failed (attempt %d): %@", attempt + 1, error.localizedDescription)
+                if attempt == 0 {
+                    try? await Task.sleep(for: .milliseconds(600))
+                    if Task.isCancelled { return nil }
+                }
+            }
         }
+        return nil
     }
 
     private func snapshotRegion() -> MKCoordinateRegion? {
@@ -557,12 +575,24 @@ private struct TweenMapSnapshotView: View {
 
         let minLatitude = coordinates.map(\.latitude).min() ?? first.latitude
         let maxLatitude = coordinates.map(\.latitude).max() ?? first.latitude
-        let minLongitude = coordinates.map(\.longitude).min() ?? first.longitude
-        let maxLongitude = coordinates.map(\.longitude).max() ?? first.longitude
+
+        // Antimeridian handling: see framedRegion(for:) in BubbleImageRenderer for the
+        // same correction. Naive min/max on longitudes that straddle ±180° picks the
+        // long-way-around arc; unwrap into positive half, compute, then renormalize.
+        let rawLons = coordinates.map(\.longitude)
+        let naiveMin = rawLons.min() ?? first.longitude
+        let naiveMax = rawLons.max() ?? first.longitude
+        let crossesAntimeridian = (naiveMax - naiveMin) > 180
+        let unwrappedLons = crossesAntimeridian ? rawLons.map { $0 < 0 ? $0 + 360 : $0 } : rawLons
+        let minLongitude = unwrappedLons.min() ?? first.longitude
+        let maxLongitude = unwrappedLons.max() ?? first.longitude
+
+        var centerLon = (minLongitude + maxLongitude) / 2
+        if centerLon > 180 { centerLon -= 360 }
 
         let center = CLLocationCoordinate2D(
             latitude: (minLatitude + maxLatitude) / 2,
-            longitude: (minLongitude + maxLongitude) / 2
+            longitude: centerLon
         )
         let span = MKCoordinateSpan(
             latitudeDelta: max((maxLatitude - minLatitude) * 1.8, 0.01),

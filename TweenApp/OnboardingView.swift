@@ -86,6 +86,7 @@ struct OnboardingView: View {
     @State private var showContactSearch = false
     @State private var pendingPing: MessagePing?
     @State private var pingError: String?
+    @State private var locationError: String?
     @State private var copyConfirmation: String?
     @State private var pendingShare: ShareIntent?
     @State private var detailItem: MKMapItem?
@@ -144,9 +145,14 @@ struct OnboardingView: View {
                         .presentationDragIndicator(.visible)
                 }
 
-            if showTutorial {
-                tutorialOverlay
-            }
+        }
+        // Tutorial is presented as a fullScreenCover (not a ZStack overlay) so it lays
+        // on top of any active sheet — the info button lives inside the bottom sheet, so
+        // tapping it while another sheet (e.g. contact search) is open would otherwise
+        // mount the tutorial behind that sheet and "do nothing" visually.
+        .fullScreenCover(isPresented: $showTutorial) {
+            tutorialOverlay
+                .presentationBackground(.clear)
         }
         .onAppear {
             prepareInitialMap()
@@ -211,6 +217,17 @@ struct OnboardingView: View {
             Button("OK", role: .cancel) { copyConfirmation = nil }
         } message: {
             Text(copyConfirmation ?? "")
+        }
+        .alert(
+            "Location unavailable",
+            isPresented: Binding(
+                get: { locationError != nil },
+                set: { if !$0 { locationError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { locationError = nil }
+        } message: {
+            Text(locationError ?? "")
         }
     }
 
@@ -1953,7 +1970,17 @@ struct OnboardingView: View {
     private func updateMyDot() {
         userClearedLocation = false
         provider.requestOnce(activate: true) { coordinate in
-            guard let coordinate else { return }
+            guard let coordinate else {
+                // Surface the failure instead of silently dismissing the share sheet.
+                // The user just tapped "Share my location" expecting their dot to land;
+                // staying quiet leaves them thinking it worked.
+                if case .denied = provider.status {
+                    locationError = "Tween needs your location to set your dot. Re-enable Location Services for Tween in Settings."
+                } else {
+                    locationError = "Couldn't capture your location. Try again in a moment."
+                }
+                return
+            }
             isUserIn = true
             savedCoordinate = coordinate
             focusOnPeople()
@@ -2499,6 +2526,7 @@ struct OnboardingView: View {
                     rankedSpots = []
                     selectedPlace = nil
                     isSearchingPlaces = false
+                    selectedCategory = nil
                     searchError = "Search failed"
                 }
             }

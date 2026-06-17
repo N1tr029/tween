@@ -290,11 +290,25 @@ enum BubbleImageRenderer {
         guard let first = coordinates.first else { return nil }
         let minLat = coordinates.map(\.latitude).min() ?? first.latitude
         let maxLat = coordinates.map(\.latitude).max() ?? first.latitude
-        let minLon = coordinates.map(\.longitude).min() ?? first.longitude
-        let maxLon = coordinates.map(\.longitude).max() ?? first.longitude
+
+        // Antimeridian handling: a naive max-min on longitudes that straddle ±180° gives
+        // the long way around. Detect via the raw spread; if it's > 180°, unwrap negatives
+        // into the positive half so min/max picks the short arc, then renormalize the
+        // computed center back into ±180°.
+        let rawLons = coordinates.map(\.longitude)
+        let naiveMin = rawLons.min() ?? first.longitude
+        let naiveMax = rawLons.max() ?? first.longitude
+        let crossesAntimeridian = (naiveMax - naiveMin) > 180
+        let unwrappedLons = crossesAntimeridian ? rawLons.map { $0 < 0 ? $0 + 360 : $0 } : rawLons
+        let minLon = unwrappedLons.min() ?? first.longitude
+        let maxLon = unwrappedLons.max() ?? first.longitude
+
+        var centerLon = (minLon + maxLon) / 2
+        if centerLon > 180 { centerLon -= 360 }
+
         let center = CLLocationCoordinate2D(
             latitude: (minLat + maxLat) / 2,
-            longitude: (minLon + maxLon) / 2
+            longitude: centerLon
         )
         let span = MKCoordinateSpan(
             latitudeDelta: max((maxLat - minLat) * 1.6, 0.015),
