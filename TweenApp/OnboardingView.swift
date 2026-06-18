@@ -586,100 +586,18 @@ struct OnboardingView: View {
         .background(isActive ? Tokens.Palette.brand : Color.clear, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
     }
 
-    private var bottomPanel: some View {
-        let isShowingDetail = panelTab == .map && detailItem != nil
-        let isShowingCommittedResults = panelTab == .map && !isLiveSearchVisible && (!displayedSearchResults.isEmpty)
+    // MARK: - Bottom Panel (rebuilt)
 
-        return VStack(alignment: .leading, spacing: 0) {
+    private var bottomPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
             sheetHeader
                 .padding(.horizontal, Tokens.Space.s5)
-                .padding(.top, searchResults.isEmpty ? Tokens.Space.s3 : Tokens.Space.s2)
+                .padding(.top, Tokens.Space.s3)
 
             if panelDetent == .peek {
-                VStack(spacing: Tokens.Space.s2) {
-                    searchBar
-                    peekSummary
-                }
-                .padding(.horizontal, Tokens.Space.s5)
-                .padding(.bottom, Tokens.Space.s4)
+                peekContent
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
-                            if !monitor.isOnline {
-                                offlineBanner
-                            }
-
-                            if isLiveSearchVisible && !isShowingDetail {
-                                Color.clear
-                                    .frame(height: Tokens.Space.s2)
-                            }
-
-                            if !isShowingDetail {
-                                searchBar
-                                    .id("sheet-search")
-                                if panelTab == .map && !isLiveSearchVisible && trimmedSearchText.isEmpty && displayedSearchResults.isEmpty {
-                                    categoryChipRow
-                                }
-                                if isLiveSearchVisible {
-                                    liveSearchContent
-                                }
-                            }
-
-                            if !isLiveSearchVisible && !isShowingDetail {
-                                if !isShowingCommittedResults {
-                                    panelTitleRow
-                                }
-                                panelPicker
-                            }
-
-                            if panelDetent != .full,
-                               panelTab == .map,
-                               !isShowingDetail,
-                               !isShowingCommittedResults,
-                               trimmedSearchText.isEmpty {
-                                statusView
-                            }
-
-                            if !isLiveSearchVisible {
-                                panelContent
-                                    .id(panelTab)
-                            }
-                        }
-                        .padding(.horizontal, Tokens.Space.s5)
-                        .padding(.top, Tokens.Space.s2)
-                        .padding(.bottom, scrollContentBottomPadding)
-                    }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .scrollDismissesKeyboard(.immediately)
-                    .contentTransition(.identity)
-                    .onChange(of: requestedPlaceScrollID) { _, id in
-                        guard let id else { return }
-                        withAnimation(Tokens.Motion.spring) {
-                            proxy.scrollTo(id, anchor: .center)
-                        }
-                    }
-                    .onChange(of: searchFocused) { _, focused in
-                        guard focused else { return }
-                        DispatchQueue.main.async {
-                            proxy.scrollTo("sheet-search", anchor: .top)
-                        }
-                    }
-                }
-
-                if shouldShowActionControls {
-                    VStack(spacing: 0) {
-                        Divider()
-                            .opacity(0.35)
-                        actionControls
-                            .padding(.horizontal, Tokens.Space.s5)
-                            .padding(.top, Tokens.Space.s3)
-                            .padding(.bottom, bottomSafeAreaInset + Tokens.Space.s3)
-                    }
-                    .background(.regularMaterial)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(Tokens.Motion.spring, value: shouldShowActionControls)
-                }
+                expandedContent
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -741,6 +659,129 @@ struct OnboardingView: View {
         }
         .sensoryFeedback(.selection, trigger: detailItem)
         .sensoryFeedback(.impact(weight: .light), trigger: selectedPlace)
+    }
+
+    // MARK: - Peek / Expanded content
+
+    private var peekContent: some View {
+        VStack(spacing: Tokens.Space.s2) {
+            searchBar
+            peekSummary
+        }
+        .padding(.horizontal, Tokens.Space.s5)
+        .padding(.bottom, Tokens.Space.s4)
+    }
+
+    private var expandedContent: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: Tokens.Space.s3 + 2) {
+                        if !monitor.isOnline {
+                            offlineBanner
+                        }
+
+                        // Search bar (always visible unless showing detail)
+                        if !(panelTab == .map && detailItem != nil) {
+                            searchBar
+                                .id("sheet-search")
+                        }
+
+                        // Live search mode: suggestions + results as you type
+                        if isLiveSearchVisible {
+                            liveSearchContent
+                        }
+
+                        // Category chips (only on map tab, no active search, no results)
+                        if panelTab == .map && !isLiveSearchVisible && trimmedSearchText.isEmpty && displayedSearchResults.isEmpty {
+                            categoryChipRow
+                        }
+
+                        // Tab picker (hidden during live search and detail view)
+                        if !isLiveSearchVisible && !(panelTab == .map && detailItem != nil) {
+                            panelPicker
+                        }
+
+                        // Tab content — completely separate branches
+                        if !isLiveSearchVisible {
+                            tabContent
+                        }
+                    }
+                    .padding(.horizontal, Tokens.Space.s5)
+                    .padding(.top, Tokens.Space.s2)
+                    .padding(.bottom, scrollContentBottomPadding)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDismissesKeyboard(.immediately)
+                .onChange(of: requestedPlaceScrollID) { _, id in
+                    guard let id else { return }
+                    withAnimation(Tokens.Motion.spring) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                }
+                .onChange(of: searchFocused) { _, focused in
+                    guard focused else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo("sheet-search", anchor: .top)
+                    }
+                }
+            }
+
+            if shouldShowActionControls {
+                VStack(spacing: 0) {
+                    Divider().opacity(0.35)
+                    actionControls
+                        .padding(.horizontal, Tokens.Space.s5)
+                        .padding(.top, Tokens.Space.s3)
+                        .padding(.bottom, bottomSafeAreaInset + Tokens.Space.s3)
+                }
+                .background(.regularMaterial)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    /// Completely separate view branches per tab — no shared conditions.
+    @ViewBuilder
+    private var tabContent: some View {
+        if panelTab == .waiting {
+            // ── Waiting tab ──
+            waitingTab
+        } else {
+            // ── Map tab ──
+            mapTabContent
+        }
+    }
+
+    @ViewBuilder
+    private var mapTabContent: some View {
+        if let detailItem {
+            SpotDetail(
+                item: detailItem,
+                ranked: rankedSpot(for: detailItem),
+                symbol: placeIcon(for: detailItem),
+                categoryTint: placeColor(for: detailItem),
+                typeLabel: placeTypeLabel(for: detailItem),
+                youDistance: distanceFrom(savedCoordinate, to: detailItem),
+                friendDistance: distanceFrom(peerCoordinate, to: detailItem),
+                namespace: spotTransition,
+                onShowOnMap: { showOnMap(detailItem) },
+                onSendToChat: { sendToChat(detailItem) },
+                onCopyLink: { copyLink(for: detailItem) },
+                onOpenInAppleMaps: { openInAppleMaps(detailItem) },
+                onOpenInGoogleMaps: { openInGoogleMaps(detailItem) },
+                onClose: closeDetail
+            )
+        } else if !searchResults.isEmpty || selectedPlace != nil {
+            placeResultsList
+        } else if searchError != nil {
+            searchErrorCard
+        } else {
+            if panelDetent != .full && trimmedSearchText.isEmpty {
+                statusView
+            }
+            mapEmptyState
+        }
     }
 
     private var sheetHeader: some View {
@@ -860,38 +901,6 @@ struct OnboardingView: View {
                 )
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private var panelContent: some View {
-        if panelTab == .waiting {
-            waitingTab
-        } else if let detailItem {
-            SpotDetail(
-                item: detailItem,
-                ranked: rankedSpot(for: detailItem),
-                symbol: placeIcon(for: detailItem),
-                categoryTint: placeColor(for: detailItem),
-                typeLabel: placeTypeLabel(for: detailItem),
-                youDistance: distanceFrom(savedCoordinate, to: detailItem),
-                friendDistance: distanceFrom(peerCoordinate, to: detailItem),
-                namespace: spotTransition,
-                onShowOnMap: { showOnMap(detailItem) },
-                onSendToChat: { sendToChat(detailItem) },
-                onCopyLink: { copyLink(for: detailItem) },
-                onOpenInAppleMaps: { openInAppleMaps(detailItem) },
-                onOpenInGoogleMaps: { openInGoogleMaps(detailItem) },
-                onClose: closeDetail
-            )
-        } else if !searchResults.isEmpty {
-            placeResultsList
-        } else if selectedPlace != nil {
-            placeResultsList
-        } else if searchError != nil {
-            searchErrorCard
-        } else {
-            mapEmptyState
-        }
     }
 
     private var shouldShowActionControls: Bool {
