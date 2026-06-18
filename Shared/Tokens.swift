@@ -114,17 +114,22 @@ enum Tokens {
 // MARK: - View extensions
 
 extension View {
-    /// The tokened glass surface — a `regularMaterial` background with a soft border and
-    /// tokened corner radius. The single seam where Liquid Glass will swap in once the
-    /// deployment target moves to iOS 26.
+    /// The tokened glass surface. On iOS 26+ uses native Liquid Glass via
+    /// `.glassEffect`; on older systems falls back to `.regularMaterial` with
+    /// a soft border stroke.
+    @ViewBuilder
     func tweenGlass(cornerRadius: CGFloat = Tokens.Radius.sheet) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
-                }
+        if #available(iOS 26, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(Tokens.Palette.glassStroke, lineWidth: 0.5)
+                    }
+            }
         }
     }
 
@@ -142,9 +147,9 @@ extension View {
 
 // MARK: - Button style
 
-/// The only primary CTA style in Tween. `prominent` is the high-emphasis variant (the
-/// seam for `glassProminent` once iOS 26 is the deployment target); `subtle` is the
-/// low-emphasis variant.
+/// The only primary CTA style in Tween. On iOS 26+ the `prominent` variant
+/// uses `.glassProminent` for a native Liquid Glass look; older systems keep
+/// the solid brand fill.
 struct TweenPrimaryButtonStyle: ButtonStyle {
     enum Emphasis { case prominent, subtle }
 
@@ -154,18 +159,33 @@ struct TweenPrimaryButtonStyle: ButtonStyle {
         self.emphasis = emphasis
     }
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Tokens.Typography.headline)
-            .foregroundStyle(foreground)
-            .padding(.horizontal, Tokens.Space.s4)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 52)
-            .background {
-                RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
-                    .fill(background)
-            }
-            .tweenPressFeedback(configuration.isPressed)
+        if #available(iOS 26, *) {
+            configuration.label
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(foreground)
+                .padding(.horizontal, Tokens.Space.s4)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 52)
+                .glassEffect(
+                    emphasis == .prominent ? .regular.interactive : .regular,
+                    in: .rect(cornerRadius: Tokens.Radius.card)
+                )
+                .tweenPressFeedback(configuration.isPressed)
+        } else {
+            configuration.label
+                .font(Tokens.Typography.headline)
+                .foregroundStyle(foreground)
+                .padding(.horizontal, Tokens.Space.s4)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 52)
+                .background {
+                    RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                        .fill(background)
+                }
+                .tweenPressFeedback(configuration.isPressed)
+        }
     }
 
     private var foreground: Color {
