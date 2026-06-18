@@ -2495,17 +2495,12 @@ struct OnboardingView: View {
         let a = savedCoordinate
         let b = peerCoordinate
 
-        placesSearchTask = Task { @MainActor in
-            // Recency guard: a newer searchPlaces (or a typed-search clear) flips the trimmed
-            // text. If the text moved on while this Task awaited the network, drop the result.
-            func stillCurrent() -> Bool {
-                !Task.isCancelled && trimmedSearchText == query
-            }
+        placesSearchTask = Task {
             do {
                 let response = try await MKLocalSearch(request: request).start()
                 let items = Array(response.mapItems.prefix(6))
                 await MainActor.run {
-                    guard stillCurrent() else { return }
+                    guard !Task.isCancelled, trimmedSearchText == query else { return }
                     searchResults = items
                     rankedSpots = []
                     selectedPlace = items.first
@@ -2521,7 +2516,7 @@ struct OnboardingView: View {
                 guard let a, let b, !items.isEmpty else { return }
                 let ranked = await FairnessRanker.rank(candidates: items, from: a, and: b)
                 await MainActor.run {
-                    guard stillCurrent() else { return }
+                    guard !Task.isCancelled, trimmedSearchText == query else { return }
                     rankedSpots = ranked
                     let rankedItems = ranked.map(\.item)
                     let unranked = items.filter { item in !rankedItems.contains(where: { $0 == item }) }
@@ -2530,7 +2525,7 @@ struct OnboardingView: View {
                 }
             } catch {
                 await MainActor.run {
-                    guard stillCurrent() else { return }
+                    guard !Task.isCancelled, trimmedSearchText == query else { return }
                     searchResults = []
                     rankedSpots = []
                     selectedPlace = nil
