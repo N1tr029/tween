@@ -790,17 +790,39 @@ struct OnboardingView: View {
     }
 
     private var panelPicker: some View {
-        Picker("View", selection: $panelTab) {
-            ForEach(HomePanelTab.allCases) { tab in
-                Label(tab.title, systemImage: tab.systemImage).tag(tab)
+        HStack(spacing: 0) {
+            panelPickerButton(.map)
+            panelPickerButton(.waiting)
+        }
+        .padding(4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Tokens.Radius.chip))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Map and Waiting tabs")
+    }
+
+    private func panelPickerButton(_ tab: HomePanelTab) -> some View {
+        let isSelected = panelTab == tab
+
+        return Button {
+            withAnimation(Tokens.Motion.spring) {
+                panelTab = tab
+                if tab == .waiting {
+                    isSearchActive = false
+                    searchFocused = false
+                }
             }
+        } label: {
+            Text(tab.title)
+                .font(Tokens.Typography.headline.weight(.semibold))
+                .foregroundStyle(isSelected ? Tokens.Palette.onSurface : Tokens.Palette.onSurfaceMuted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: Tokens.Radius.chip)
+                        .fill(isSelected ? Tokens.Palette.onSurface.opacity(0.16) : Color.clear)
+                )
         }
-        .pickerStyle(.segmented)
-        .onChange(of: panelTab) { _, tab in
-            guard tab == .waiting else { return }
-            isSearchActive = false
-            searchFocused = false
-        }
+        .buttonStyle(.plain)
     }
 
     private var keyboardPanelPicker: some View {
@@ -842,36 +864,33 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private var panelContent: some View {
-        switch panelTab {
-        case .map:
-            if let detailItem {
-                SpotDetail(
-                    item: detailItem,
-                    ranked: rankedSpot(for: detailItem),
-                    symbol: placeIcon(for: detailItem),
-                    categoryTint: placeColor(for: detailItem),
-                    typeLabel: placeTypeLabel(for: detailItem),
-                    youDistance: distanceFrom(savedCoordinate, to: detailItem),
-                    friendDistance: distanceFrom(peerCoordinate, to: detailItem),
-                    namespace: spotTransition,
-                    onShowOnMap: { showOnMap(detailItem) },
-                    onSendToChat: { sendToChat(detailItem) },
-                    onCopyLink: { copyLink(for: detailItem) },
-                    onOpenInAppleMaps: { openInAppleMaps(detailItem) },
-                    onOpenInGoogleMaps: { openInGoogleMaps(detailItem) },
-                    onClose: closeDetail
-                )
-            } else if !searchResults.isEmpty {
-                placeResultsList
-            } else if selectedPlace != nil {
-                placeResultsList
-            } else if searchError != nil {
-                searchErrorCard
-            } else {
-                mapEmptyState
-            }
-        case .waiting:
+        if panelTab == .waiting {
             waitingTab
+        } else if let detailItem {
+            SpotDetail(
+                item: detailItem,
+                ranked: rankedSpot(for: detailItem),
+                symbol: placeIcon(for: detailItem),
+                categoryTint: placeColor(for: detailItem),
+                typeLabel: placeTypeLabel(for: detailItem),
+                youDistance: distanceFrom(savedCoordinate, to: detailItem),
+                friendDistance: distanceFrom(peerCoordinate, to: detailItem),
+                namespace: spotTransition,
+                onShowOnMap: { showOnMap(detailItem) },
+                onSendToChat: { sendToChat(detailItem) },
+                onCopyLink: { copyLink(for: detailItem) },
+                onOpenInAppleMaps: { openInAppleMaps(detailItem) },
+                onOpenInGoogleMaps: { openInGoogleMaps(detailItem) },
+                onClose: closeDetail
+            )
+        } else if !searchResults.isEmpty {
+            placeResultsList
+        } else if selectedPlace != nil {
+            placeResultsList
+        } else if searchError != nil {
+            searchErrorCard
+        } else {
+            mapEmptyState
         }
     }
 
