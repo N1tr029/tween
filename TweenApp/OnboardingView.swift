@@ -2495,7 +2495,7 @@ struct OnboardingView: View {
         let a = savedCoordinate
         let b = peerCoordinate
 
-        placesSearchTask = Task {
+        placesSearchTask = Task { @MainActor in
             // Recency guard: a newer searchPlaces (or a typed-search clear) flips the trimmed
             // text. If the text moved on while this Task awaited the network, drop the result.
             func stillCurrent() -> Bool {
