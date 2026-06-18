@@ -627,7 +627,9 @@ struct OnboardingView: View {
                             }
 
                             if !isLiveSearchVisible && !isShowingDetail {
-                                panelTitleRow
+                                if !isShowingCommittedResults {
+                                    panelTitleRow
+                                }
                                 panelPicker
                             }
 
@@ -641,6 +643,7 @@ struct OnboardingView: View {
 
                             if !isLiveSearchVisible {
                                 panelContent
+                                    .id(panelTab)
                             }
                         }
                         .padding(.horizontal, Tokens.Space.s5)
@@ -649,7 +652,7 @@ struct OnboardingView: View {
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollDismissesKeyboard(.immediately)
-                    .animation(nil, value: panelTab)
+                    .contentTransition(.identity)
                     .onChange(of: requestedPlaceScrollID) { _, id in
                         guard let id else { return }
                         withAnimation(Tokens.Motion.spring) {
