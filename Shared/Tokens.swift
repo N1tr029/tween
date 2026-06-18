@@ -169,7 +169,7 @@ struct TweenPrimaryButtonStyle: ButtonStyle {
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 52)
                 .glassEffect(
-                    emphasis == .prominent ? .regular.interactive : .regular,
+                    emphasis == .prominent ? .regular.interactive() : .regular,
                     in: .rect(cornerRadius: Tokens.Radius.card)
                 )
                 .tweenPressFeedback(configuration.isPressed)
