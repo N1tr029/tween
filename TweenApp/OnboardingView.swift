@@ -130,19 +130,9 @@ struct OnboardingView: View {
                 Spacer()
             }
 
-            Color.clear
-                .frame(width: 0, height: 0)
-                .allowsHitTesting(false)
-                .sheet(isPresented: .constant(true)) {
-                    bottomPanel
-                        .presentationDetents(Self.sheetDetents, selection: $selectedSheetDetent)
-                        .presentationBackground(.regularMaterial)
-                        .presentationCornerRadius(34)
-                        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
-                        .presentationContentInteraction(.scrolls)
-                        .interactiveDismissDisabled()
-                        .presentationDragIndicator(.visible)
-                }
+            // Bottom panel sheet removed — to be rebuilt.
+            // The sheet and its entire bottomPanel view tree have been
+            // stripped so the map renders cleanly on its own.
 
         }
         // Tutorial is presented as a fullScreenCover (not a ZStack overlay) so it lays
