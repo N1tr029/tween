@@ -269,6 +269,7 @@ struct OnboardingView: View {
                 lastVisibleRegion = context.region
                 refreshSearchCompleterRegionIfNeeded(context.region)
             }
+            .mapControls { }
             .animation(Tokens.Motion.spring, value: searchResults.count)
             .animation(Tokens.Motion.spring, value: savedCoordinate?.latitude)
             .animation(Tokens.Motion.spring, value: displayPeerCoordinate?.latitude)
